@@ -26,3 +26,11 @@ viscous_coil_stokes:
 	$(HXX) viscous_coil_stokes.hip fluid/viscous_fluid
 
 viscous_coils: viscous_coil viscous_coil_stokes
+
+dam_break_houdini:
+	$(HXX) dam_break.hip houdini/houdini_fluid
+
+dam_break_stokes:
+	$(HXX) dam_break.hip stokes/stokes_fluid
+
+dam_break: dam_break_stokes dam_break_houdini
