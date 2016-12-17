@@ -636,8 +636,8 @@ SIM_Stokes::getDopDescription()
 
   static SIM_DopDescription  theDopDescription(
       true,   // Should we make a DOP?
-      "hdk_projectstokes",  // Internal name of the DOP.
-      "Project Stokes",   // Label of the DOP
+      "hdk_stokes",  // Internal name of the DOP.
+      "Stokes",   // Label of the DOP
       "Solver",   // Default data name
       classname(),  // The type of this DOP, usually the class.
       theTemplates);  // Template list for generating the DOP

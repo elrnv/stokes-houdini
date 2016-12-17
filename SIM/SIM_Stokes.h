@@ -69,6 +69,6 @@ private:
   DECLARE_STANDARD_GETCASTTOTYPE();
   DECLARE_DATAFACTORY(SIM_Stokes,
       GAS_SubSolver,
-      "Project Stokes",
+      "Stokes",
       getDopDescription());
 };
