@@ -45,13 +45,13 @@ coil_stokes:
 conveyor_belt:
 	$(HXX) conveyor_belt.hip dopnet1/output
 
-viscous_coil:
-	$(HXX) viscous_coil.hip fluid/viscous_fluid
+viscous_coil_houdini:
+	$(HXX) viscous_coil_houdini.hip fluid/viscous_fluid
 
 viscous_coil_stokes:
 	$(HXX) viscous_coil_stokes.hip fluid/viscous_fluid
 
-viscous_coils: viscous_coil viscous_coil_stokes
+viscous_coils: viscous_coil_houdini viscous_coil_stokes
 
 dam_break_houdini:
 	$(HXX) dam_break.hip houdini/houdini_fluid
