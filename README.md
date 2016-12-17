@@ -1,5 +1,7 @@
 # Stokes Variational MicroSolver Plugin DOP for Houdini
 
+## Building
+
 Before building anything, create a file called EigenPathMakefile and add a
 single line setting the EIGEN_INCLUDE_PATH variable:
 ```
@@ -21,3 +23,8 @@ $ make install
 
 Note: instructions will differ for Windows
 
+## TODO
+
+- The pure Viscosity solve is currently broken. Need to fix that (low priority)
+- Add surface tension
+- Add more examples
