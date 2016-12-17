@@ -5,28 +5,21 @@
 
 #CXX = clang-omp
 
-HOSTNAME := $(shell hostname | sed 's/.cs//')
+include EigenPathMakefile # sets the EIGEN_INCLUDE_PATH variable
+
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Linux)
 	DSONAME = libStokes.so
-	INCDIRS = -fopenmp -I./solver/
-	ifeq ($(HOSTNAME),poisson)
-		INCDIRS += -I/home/elariono/local/include/eigen3 
-	else
-		INCDIRS += -I/home/elarionov/proj/eigen
-	endif
+	INCDIRS = -fopenmp
 else ifeq ($(UNAME_S),Darwin)
 	DSONAME = libStokes.dylib
-	INCDIRS = -I/Users/egor/proj/Eigen -I./solver/
 	LIBS = -framework OpenCL
 endif
 
-SOP_SOURCES = SOP/SOP_Stokes.C \
-							SOP/resample_vdb.C \
-							SOP/advect_vdb.C
-SOLVER_SOURCES = solver/stokes3d.cpp
+INCDIRS += -I$(EIGEN_INCLUDE_PATH)
+
 SOURCES = main.C SIM/SIM_Stokes.C
-#$(SOP_SOURCES) 
+
 #OPTIMIZER = -g
 OPTIMIZER = -O3 -DNDEBUG
 

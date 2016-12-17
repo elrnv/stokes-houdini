@@ -1,9 +1,8 @@
 #include <UT/UT_DSOVersion.h>
 #include <OP/OP_Operator.h>
 #include <OP/OP_OperatorTable.h>
-#include "solver/eigen.h"
+#include "util/eigen.h"
 #include "SIM/SIM_Stokes.h"
-#include "SOP/SOP_Stokes.h"
 
 ///
 /// This is the hook that Houdini grabs from the dll to link in
@@ -14,8 +13,10 @@ void
 initializeSIM(void *)
 {
   Eigen::setNbThreads(12);
+#ifndef NDEBUG
   if ( Eigen::nbThreads() > 1 )
     std::cout << "Eigen is multithreaded" << std::endl;
+#endif
   IMPLEMENT_DATAFACTORY(SIM_Stokes);
 }
 

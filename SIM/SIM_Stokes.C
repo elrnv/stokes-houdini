@@ -15,7 +15,7 @@
 #include <CE/CE_SparseMatrix.h>
 #include <utility>
 #include <iostream>
-#include <../util/eigen.h>
+#include "../util/eigen.h"
 
 //#define BLOCKWISE_STOKES
 //#define USE_EIGEN_FOR_BLOCKWISE
