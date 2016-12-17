@@ -47,7 +47,7 @@ respectively.
 Once disconnected, you can reap the benefits of the **Slip On
 Collision** feature on the **FLIP Solver** when viscosity is enabled.  If viscosity
 is disabled in the **FLIP Solver**, the resulting simulation will still exhibit
-viscosity.  If you want to bypass the full stokes solver without modifying the
+viscosity.  If you want to bypass the full Stokes solver without modifying the
 **FLIP Solver** network further, simply select the **Pressure Only** **Scheme** on
 the **Stokes** node to disable viscosity.
 
