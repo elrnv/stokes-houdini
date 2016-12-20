@@ -17,8 +17,8 @@
 #include <iostream>
 #include "../util/eigen.h"
 
-//#define BLOCKWISE_STOKES
-//#define USE_EIGEN_FOR_BLOCKWISE
+#define BLOCKWISE_STOKES
+#define USE_EIGEN_SOLVER_FOR_BLOCKWISE_STOKES
 
 using std::tuple;
 using std::make_tuple;
@@ -41,9 +41,10 @@ enum FieldIndex
 
 enum SolveType
 {
-  COLLISION = -2,
-  INVALIDIDX = -1,
-  SOLVED = 1
+  AIR = -2,
+  INVALIDIDX = -1, // negative types do not get an index
+  SOLVED = 1, // positive types get an index
+  COLLISION = 2
 };
 
 enum SolverResult
@@ -131,8 +132,9 @@ public:
                          const SIM_VectorField & vel) const;
 
   void buildSystemBlockwise(
-      BlockMatrixType &matrix, BlockVectorType &rhs, BlockMatrixType &H,
+      BlockMatrixType &matrix, BlockVectorType &rhs, BlockMatrixType &H, BlockVectorType &ust,
       const BlockVectorType &ustar,
+      const SIM_RawField & surf,
       const SIM_RawField * const* valid,
       const SIM_RawField * const* surf_weights,
       const SIM_RawField * const* col_weights,
@@ -141,13 +143,33 @@ public:
       const SIM_RawField * const* solid_vel,
       const SIM_RawField & surf_pres) const;
 
+  void pinDirichletPressure(
+      BlockMatrixType& A,
+      BlockVectorType& b,
+      T p,
+      int idx) const;
+  void applyDirichletBoundary(
+      BlockMatrixType& A,
+      BlockVectorType& b,
+      const BlockVectorType& p,
+      const UT_VoxelArrayF& c_vol_liquid) const;
   void buildDecoupledSystem(
       BlockMatrixType &,  BlockMatrixType &, BlockMatrixType &,
       BlockMatrixType &,  BlockMatrixType &, BlockMatrixType &,
+      const SIM_RawField & surf,
       const SIM_RawField * const* valid,
       const SIM_RawField * const* surf_weights,
       const SIM_RawField * const* col_weights,
       const SIM_RawField &viscosity,
+      const SIM_RawField &density,
+      const SIM_RawField * const* solid_vel,
+      const SIM_RawField & surf_pres) const;
+  void buildPressureOnlySystem(
+      BlockMatrixType &,  BlockMatrixType &, BlockMatrixType &,
+      const SIM_RawField & surf,
+      const SIM_RawField * const* valid,
+      const SIM_RawField * const* surf_weights,
+      const SIM_RawField * const* col_weights,
       const SIM_RawField &density,
       const SIM_RawField * const* solid_vel,
       const SIM_RawField & surf_pres) const;
@@ -170,7 +192,6 @@ public:
       const BlockMatrixType& D,
       const BlockMatrixType& Pinv,
       const BlockMatrixType& Minv,
-      const BlockVectorType& pbc,
       BlockMatrixType& Ap,
       BlockMatrixType& Bp,
       BlockMatrixType& Hp,
@@ -204,6 +225,7 @@ public:
       VectorType &newb) const;
 
   SolverResult solveBlockwiseStokes(
+        const SIM_RawField & surf,
         const SIM_RawField * const* valid,
         const SIM_RawField * const* sweights,
         const SIM_RawField * const* cweights,
@@ -300,19 +322,28 @@ public:
       const SIM_RawField * const* colvel) const -> BlockVectorType;
   auto buildSolidVelocityVector(const SIM_RawField * const* vel) const -> BlockVectorType;
   auto buildSurfaceTensionPressureVector(const SIM_RawField & surfp) const -> BlockVectorType;
-
+  auto buildGhostFluidSurfaceTensionPressureVector(
+      const SIM_RawField * const* surf_weights,
+      const SIM_RawField & surfp) const -> BlockVectorType;
+  auto buildSurfaceTensionRHS(
+      const SIM_RawField * const* valid,
+      const SIM_RawField * const* surf_weights,
+      const SIM_RawField * const* col_weights,
+      const SIM_RawField & density,
+      const BlockVectorType &ust) const -> BlockVectorType;
 
   /// Main entry point into the solver. This builds the system, solves it and
   /// updates velocities
   SolverResult solve(
-        SIM_RawField * valid[3],
-        const SIM_RawField * const* sweights,
-        const SIM_RawField * const* cweights,
-        const SIM_RawField & viscosity,
-        const SIM_RawField & density,
-        const SIM_RawField * const* solid_vel,
-        const SIM_RawField & surfpres,
-        SIM_VectorField & vel) const;
+      const SIM_RawField & phi,
+      SIM_RawField * valid[3],
+      const SIM_RawField * const* sweights,
+      const SIM_RawField * const* cweights,
+      const SIM_RawField & viscosity,
+      const SIM_RawField & density,
+      const SIM_RawField * const* solid_vel,
+      const SIM_RawField & surfpres,
+      SIM_VectorField & vel) const;
 
 private: // routine members
   // System builder helpers
@@ -489,7 +520,19 @@ private: // routine members
 
 public:
   void buildDeformationRateOperator(BlockMatrixType& D) const;
+  template<bool GHOST = true>
+  void buildGradientOperator(
+      const UT_VoxelArrayF & u_weights,
+      const UT_VoxelArrayF & v_weights,
+      const UT_VoxelArrayF & w_weights,
+      BlockMatrixType& G) const;
   void buildGradientOperator(BlockMatrixType& G) const;
+  void buildGhostFluidMatrix(
+      const UT_VoxelArrayF & u_weights,
+      const UT_VoxelArrayF & v_weights,
+      const UT_VoxelArrayF & w_weights,
+      BlockMatrixType& GF) const;
+  void buildSumNeighboursOperator(BlockMatrixType& N) const;
   template<bool INVERSE>
   void buildViscosityMatrix(const SIM_RawField & viscosity, BlockMatrixType& M) const;
   void buildDensityMatrix(
@@ -826,6 +869,7 @@ SIM_Stokes::solveGasSubclass(SIM_Engine &engine,
   }
   else
   {
+    surfpresfield.match(*surface->getField());
     surfpresfield.makeConstant(0);
     surfpres = &surfpresfield;
   }
@@ -888,7 +932,6 @@ SIM_Stokes::solveGasSubclass(SIM_Engine &engine,
       sweights[6] = &w_liquid_weights;
     }
 
-
     simEstimateVolumeFractions(surffield, is_surf_const, SIM_SAMPLE_CENTER, ns, false, c_liquid_weights);
     simEstimateVolumeFractions(surffield, is_surf_const, SIM_SAMPLE_EDGEXY, ns, false, xy_liquid_weights);
     simEstimateVolumeFractions(surffield, is_surf_const, SIM_SAMPLE_EDGEXZ, ns, false, xz_liquid_weights);
@@ -921,7 +964,9 @@ SIM_Stokes::solveGasSubclass(SIM_Engine &engine,
     simEstimateVolumeFractions(colfield, is_col_const, SIM_SAMPLE_EDGEXZ, ns, false, xz_fluid_weights);
     simEstimateVolumeFractions(colfield, is_col_const, SIM_SAMPLE_EDGEYZ, ns, false, yz_fluid_weights);
   }
+#ifndef NDEBUG
   for (int i = 0; i < 7; ++i ) { assert(sweights[i] && cweights[i]); } // make sure we got all of them
+#endif
   
   // ----- Done Computing Volume Fraction Weights -----
   
@@ -943,14 +988,14 @@ SIM_Stokes::solveGasSubclass(SIM_Engine &engine,
   {
     sim_stokesSolver<fpreal32> solver(*this, obj, nx, ny, nz, dx, timestep);
     solver.buildIndices(sweights, cweights);
-    result = solver.solve(validfields, sweights, cweights, *viscfield, *densfield, colvel, *surfpres, *velocity);
+    result = solver.solve(*surffield, validfields, sweights, cweights, *viscfield, *densfield, colvel, *surfpres, *velocity);
   }
   else
   {
     assert( float_precision == FLOAT64 ); // only one option left
     sim_stokesSolver<fpreal64> solver(*this, obj, nx, ny, nz, dx, timestep);
     solver.buildIndices(sweights, cweights);
-    result = solver.solve(validfields, sweights, cweights, *viscfield, *densfield, colvel, *surfpres, *velocity);
+    result = solver.solve(*surffield, validfields, sweights, cweights, *viscfield, *densfield, colvel, *surfpres, *velocity);
   }
 
   if ( result == SUCCESS )
@@ -965,6 +1010,7 @@ SIM_Stokes::solveGasSubclass(SIM_Engine &engine,
 template<typename T>
 SolverResult
 sim_stokesSolver<T>::solve(
+    const SIM_RawField & surf,
     SIM_RawField * valid[3],
     const SIM_RawField * const* sweights,
     const SIM_RawField * const* cweights,
@@ -981,10 +1027,10 @@ sim_stokesSolver<T>::solve(
 
   computeValidities(valid, sweights, cweights, vel);
 
-  if (myScheme == STOKES)
+  if ( myScheme == STOKES )
   {
 #ifdef BLOCKWISE_STOKES
-    result = solveBlockwiseStokes(valid, sweights, cweights, viscosity, density, colvel, surfpres, vel);
+    result = solveBlockwiseStokes(surf, valid, sweights, cweights, viscosity, density, colvel, surfpres, vel);
 #else
     result = solveStokes(valid, sweights, cweights, viscosity, density, colvel, vel);
 #endif
@@ -1014,6 +1060,37 @@ sim_stokesSolver<T>::solve(
 
     updateVelocitiesBlockwise(xbig, valid, colvel, vel);
   }
+  else if ( myScheme == PRESSURE_ONLY )
+  {
+    BlockMatrixType A, B, H;
+    BlockVectorType uold = buildVelocityVector(valid, vel, colvel);
+    {
+      UT_PerfMonAutoSolveEvent event(&mySolver, "Build Pressure System");
+      buildPressureOnlySystem(A, B, H, surf, valid, sweights, cweights, density, colvel, surfpres);
+      A.makeCompressed();
+    }
+    // enforce surface tension pressure boundary conditions
+    BlockVectorType gfst = buildGhostFluidSurfaceTensionPressureVector(sweights, surfpres);
+    BlockVectorType ust = buildSurfaceTensionRHS(valid, sweights, cweights, density, gfst);
+    // build remaining necessary operators
+    BlockMatrixType WFu(myNumVelocityVars, myNumVelocityVars);
+    const UT_VoxelArrayF &u_vol_fluid = *cweights[4]->field();
+    const UT_VoxelArrayF &v_vol_fluid = *cweights[5]->field();
+    const UT_VoxelArrayF &w_vol_fluid = *cweights[6]->field();
+    buildVelocityWeightMatrix<false>(u_vol_fluid, v_vol_fluid, w_vol_fluid, WFu);
+    BlockMatrixType G(myNumVelocityVars, myNumPressureVars);
+    buildGradientOperator(G); // sums surface tension values around one cell
+
+    BlockVectorType p(getNumPressureVars());
+    BlockVectorType b = B*uold - G.transpose()*WFu*ust;
+    result = solveSystemEigen(A,b,p);
+    if (result != SUCCESS)
+      return result;
+    uold -= H*p;
+    uold -= (1.0/dx) * ust;
+
+    updateVelocitiesBlockwise(uold, valid, colvel, vel);
+  }
   else
   {
     BlockVectorType b;
@@ -1023,7 +1100,7 @@ sim_stokesSolver<T>::solve(
     BlockVectorType t(getNumStressVars());
     {
       UT_PerfMonAutoSolveEvent event(&mySolver, "Build Blockwise System");
-      buildDecoupledSystem(At, Bt, Ht, Ap, Bp, H, valid, sweights, cweights, viscosity, density, colvel, surfpres);
+      buildDecoupledSystem(At, Bt, Ht, Ap, Bp, H, surf, valid, sweights, cweights, viscosity, density, colvel, surfpres);
       Ap.makeCompressed();
       At.makeCompressed();
     }
@@ -1037,24 +1114,18 @@ sim_stokesSolver<T>::solve(
     }
 
     // Viscosity solve
-    if ( myScheme != PRESSURE_ONLY )
-    {
-      b = Bt*uold;
-      result = solveSystemEigen(At,b,t);
-      if (result != SUCCESS)
-        return result;
-      uold -= Ht*t;
-    }
+    b = Bt*uold;
+    result = solveSystemEigen(At,b,t);
+    if (result != SUCCESS)
+      return result;
+    uold -= Ht*t;
 
     // Pressure solve
-    if ( myScheme != VISCOSITY_ONLY )
-    {
-      b = Bp*uold;
-      result = solveSystemEigen(Ap,b,p);
-      if (result != SUCCESS)
-        return result;
-      uold -= H*p;
-    }
+    b = Bp*uold;
+    result = solveSystemEigen(Ap,b,p);
+    if (result != SUCCESS)
+      return result;
+    uold -= H*p;
 
     updateVelocitiesBlockwise(uold, valid, colvel, vel);
   }
@@ -1530,10 +1601,10 @@ SolveType sim_stokesSolver<T>::solveType(
     case CENTER:
       insystem =
         ( !c_oob(i,j,k) &&
-          c_vol_liquid(i,j,k) && c_vol_fluid(i,j,k) &&
-          !u_oob(i+1,j,k) && u_vol_liquid(i+1,j,k) && u_vol_liquid(i,j,k) && 
-          !v_oob(i,j+1,k) && v_vol_liquid(i,j+1,k) && v_vol_liquid(i,j,k) &&
-          !w_oob(i,j,k+1) && w_vol_liquid(i,j,k+1) && w_vol_liquid(i,j,k) );
+          c_vol_liquid(i,j,k) || c_vol_fluid(i,j,k) ||
+          (!u_oob(i+1,j,k) && u_vol_liquid(i+1,j,k)) || u_vol_liquid(i,j,k) || 
+          (!v_oob(i,j+1,k) && v_vol_liquid(i,j+1,k)) || v_vol_liquid(i,j,k) ||
+          (!w_oob(i,j,k+1) && w_vol_liquid(i,j,k+1)) || w_vol_liquid(i,j,k) );
       break;
 
     case EDGEXY:
@@ -1597,13 +1668,27 @@ SolveType sim_stokesSolver<T>::solveType(
           ex_vol_fluid(i,j,k) && !tyz_oob(i,j+1,k) && ex_vol_fluid(i,j+1,k) );
       break;
 
+    case CENTER:
+      insystem =
+        ( !c_oob(i,j,k) &&
+          c_vol_liquid(i,j,k) && c_vol_fluid(i,j,k) &&
+          (!u_oob(i+1,j,k) && u_vol_liquid(i+1,j,k)) && u_vol_liquid(i,j,k) && 
+          (!v_oob(i,j+1,k) && v_vol_liquid(i,j+1,k)) && v_vol_liquid(i,j,k) &&
+          (!w_oob(i,j,k+1) && w_vol_liquid(i,j,k+1)) && w_vol_liquid(i,j,k) );
+      break;
+
     default:
       break;
   }
 
-  return insystem ? SOLVED : COLLISION;
+  if ( fidx == CENTER )
+    return insystem ? SOLVED : AIR; // needed for surface tension (doesn't get an index)
+  else
+    return insystem ? SOLVED : COLLISION; // needed for moving boundaries (gets an index in blockwise code)
 }
 
+// PRE: fidx is one of FACEX, FACEY or FACEZ. If not, reconsider the solveType
+// function above
 template<typename T>
 void
 sim_stokesSolver<T>::computeValidityPartial(
@@ -1690,13 +1775,13 @@ sim_stokesSolver<T>::buildIndex(
   UT_VoxelTileIteratorI vitt;
   for (vit.rewind(); !vit.atEnd(); vit.advanceTile())
   {
-    if ( vit.isTileConstant() && vit.getValue() == INVALIDIDX )
+    if ( vit.isTileConstant() && !isInSystem(vit.getValue()) )
       continue;
 
     vitt.setTile(vit);
     for (vitt.rewind(); !vitt.atEnd(); vitt.advance())
     {
-      if (vitt.getValue() != INVALIDIDX)
+      if ( isInSystem(vitt.getValue()) )
         vitt.setValue(maxindex++);
     }
   }
@@ -1752,7 +1837,6 @@ sim_stokesSolver<T>::buildDeformationRateOperator(BlockMatrixType &D) const
 #ifndef BLOCKWISE_STOKES
   assert(myScheme != STOKES);
 #endif
-  // NOTE: Valid tests are omitted to handle boundary conditions
   triplets.clear();
   auto set_val = [&](int row, int col, T val)
   {
@@ -1875,9 +1959,24 @@ sim_stokesSolver<T>::buildDeformationRateOperator(BlockMatrixType &D) const
 //  D *= 0.5;
 }
 
+
 template<typename T>
 void
-sim_stokesSolver<T>::buildGradientOperator(BlockMatrixType &G) const
+sim_stokesSolver<T>::buildGradientOperator(
+    BlockMatrixType &G) const
+{
+  UT_VoxelArrayF a,b,c;
+  buildGradientOperator<false>(a,b,c,G);
+}
+
+template<typename T>
+template<bool GHOST>
+void
+sim_stokesSolver<T>::buildGradientOperator(
+    const UT_VoxelArrayF &u_weights,
+    const UT_VoxelArrayF &v_weights,
+    const UT_VoxelArrayF &w_weights,
+    BlockMatrixType &G) const
 {
 #ifndef BLOCKWISE_STOKES
   assert(myScheme != STOKES);
@@ -1887,6 +1986,16 @@ sim_stokesSolver<T>::buildGradientOperator(BlockMatrixType &G) const
   {
     if ( isInSystem(row) )
       triplets.emplace_back( row, col, val );
+  };
+
+  auto add_gf_val = [&](int i, int j, int k, int in, int jn, int kn, int row, T theta, T sign )
+  {
+    auto neigh = p_blk_idx(in,jn,kn);
+    if ( neigh == AIR )
+    {
+      auto gf = (1.0-theta) / theta;
+      triplets.emplace_back( row, p_blk_idx(i,j,k), sign*gf );
+    }
   };
 
   // build gradient opperator on a per column basis
@@ -1904,9 +2013,112 @@ sim_stokesSolver<T>::buildGradientOperator(BlockMatrixType &G) const
     set_val( v_blk_idx(i,j+1,k), p_blk_idx(i,j,k), -1);
     set_val( w_blk_idx(i,j,k),   p_blk_idx(i,j,k),  1);
     set_val( w_blk_idx(i,j,k+1), p_blk_idx(i,j,k), -1);
+    
+    // add ghost fluid contribution
+    if ( GHOST )
+    {
+      add_gf_val(i,j,k, i-1,j,k, u_blk_idx(i,j,k),   u_weights(i,j,k),    1);
+      add_gf_val(i,j,k, i+1,j,k, u_blk_idx(i+1,j,k), u_weights(i+1,j,k), -1);
+      add_gf_val(i,j,k, i,j-1,k, v_blk_idx(i,j,k),   v_weights(i,j,k),    1);
+      add_gf_val(i,j,k, i,j+1,k, v_blk_idx(i,j+1,k), v_weights(i,j+1,k), -1);
+      add_gf_val(i,j,k, i,j,k-1, w_blk_idx(i,j,k),   w_weights(i,j,k),    1);
+      add_gf_val(i,j,k, i,j,k+1, w_blk_idx(i,j,k+1), w_weights(i,j,k+1), -1);
+    }
   }
 
   G.setFromTriplets( triplets.begin(), triplets.end() );
+}
+
+template<typename T>
+void
+sim_stokesSolver<T>::buildGhostFluidMatrix(
+    const UT_VoxelArrayF &u_weights,
+    const UT_VoxelArrayF &v_weights,
+    const UT_VoxelArrayF &w_weights,
+    BlockMatrixType &GF) const
+{
+#ifndef BLOCKWISE_STOKES
+  assert(myScheme != STOKES);
+#endif
+  triplets.clear();
+
+  auto add_gf_val = [&](int i, int j, int k, int in, int jn, int kn, int idx, T theta)
+  {
+    if ( p_blk_idx(in,jn,kn) == AIR || p_blk_idx(i,j,k) == AIR )
+    {
+      assert( theta );
+      auto gf = (1.0-theta) / theta; // theta is guaranteed to be non-zero
+      triplets.emplace_back( idx, idx, gf );
+    }
+  };
+
+  UT_VoxelArrayIteratorF vit;
+  vit.setConstArray(&u_weights);
+  for ( vit.rewind(); !vit.atEnd(); vit.advance() )
+  {
+    int i = vit.x(), j = vit.y(), k = vit.z();
+    auto idx = u_blk_idx(i,j,k);
+    if (!isInSystem(idx) || vit.getValue() == 0.0f)
+      continue;
+    triplets.emplace_back(idx, idx, 1); // this matrix is the identity except for ghost fluid contributions
+    add_gf_val(i,j,k, i-1,j,k, idx, u_weights(i,j,k));
+  }
+  vit.setConstArray(&v_weights);
+  for ( vit.rewind(); !vit.atEnd(); vit.advance() )
+  {
+    int i = vit.x(), j = vit.y(), k = vit.z();
+    auto idx = v_blk_idx(i,j,k);
+    if (!isInSystem(idx) || vit.getValue() == 0.0f)
+      continue;
+    triplets.emplace_back(idx, idx, 1);
+    add_gf_val(i,j,k, i,j-1,k, idx, v_weights(i,j,k));
+  }
+  vit.setConstArray(&w_weights);
+  for ( vit.rewind(); !vit.atEnd(); vit.advance() )
+  {
+    int i = vit.x(), j = vit.y(), k = vit.z();
+    auto idx = w_blk_idx(i,j,k);
+    if (!isInSystem(idx) || vit.getValue() == 0.0f)
+      continue;
+    triplets.emplace_back(idx, idx, 1);
+    add_gf_val(i,j,k, i,j,k-1, idx, w_weights(i,j,k));
+  }
+
+  GF.setFromTriplets( triplets.begin(), triplets.end() );
+}
+
+template<typename T>
+void
+sim_stokesSolver<T>::buildSumNeighboursOperator(BlockMatrixType &N) const
+{
+#ifndef BLOCKWISE_STOKES
+  assert(myScheme != STOKES);
+#endif
+  triplets.clear();
+  auto set_val = [&](int row, int col, T val)
+  {
+    if ( isInSystem(col) )
+      triplets.emplace_back( row, col, val );
+  };
+
+  // build gradient opperator on a per column basis
+  UT_VoxelArrayIteratorI vit;
+  vit.setConstArray(myCentralIndex.field());
+  for ( vit.rewind(); !vit.atEnd(); vit.advance() )
+  {
+    int i = vit.x(), j = vit.y(), k = vit.z();
+    if ( !isInSystem(vit.getValue()) )
+      continue;
+
+    set_val( p_blk_idx(i,j,k), u_blk_idx(i,j,k),   1);
+    set_val( p_blk_idx(i,j,k), u_blk_idx(i+1,j,k), 1);
+    set_val( p_blk_idx(i,j,k), v_blk_idx(i,j,k),   1);
+    set_val( p_blk_idx(i,j,k), v_blk_idx(i,j+1,k), 1);
+    set_val( p_blk_idx(i,j,k), w_blk_idx(i,j,k),   1);
+    set_val( p_blk_idx(i,j,k), w_blk_idx(i,j,k+1), 1);
+  }
+
+  N.setFromTriplets( triplets.begin(), triplets.end() );
 }
 
 template<typename T>
@@ -2246,6 +2458,71 @@ sim_stokesSolver<T>::buildStressWeightMatrix(
   W.setFromTriplets(triplets.begin(), triplets.end());
 }
 
+// PRE:  input is the surface tension pressure field
+// POST: output is the vector aligned with velocity values at cell interfaces
+// containing the ghost pressures where one neighbour is inside and one outside
+// of the liquid. Values where there is no ghost pressure are zero.
+template<typename T>
+auto
+sim_stokesSolver<T>::buildGhostFluidSurfaceTensionPressureVector(
+    const SIM_RawField * const* surf_weights,
+    const SIM_RawField & surfp) const -> BlockVectorType
+{
+  const UT_VoxelArrayF &u_weights = *surf_weights[4]->field();
+  const UT_VoxelArrayF &v_weights = *surf_weights[5]->field();
+  const UT_VoxelArrayF &w_weights = *surf_weights[6]->field();
+  const UT_VoxelArrayF &sp = *(surfp.field());
+
+  BlockVectorType ust(myNumVelocityVars);
+  ust.setZero();
+
+  UT_VoxelArrayIteratorF vit;
+  vit.setConstArray(&u_weights);
+  for ( vit.rewind(); !vit.atEnd(); vit.advance() )
+  {
+    int i = vit.x(), j = vit.y(), k = vit.z();
+    auto uidx = u_blk_idx(i,j,k);
+    if (!isInSystem(uidx) || vit.getValue() == 0.0f)
+      continue;
+    auto pidx0 = p_blk_idx(i-1,j,k);
+    auto pidx1 = p_blk_idx(i,j,k);
+    if ( pidx0 == AIR && isInSystem(pidx1) )
+      ust[uidx] = -SYSlerp(sp(i,j,k), sp.getValue(i-1,j,k), vit.getValue());
+    else if ( pidx1 == AIR && isInSystem(pidx0) )
+      ust[uidx] = SYSlerp(sp.getValue(i-1,j,k), sp(i,j,k), vit.getValue());
+  }
+  vit.setConstArray(&v_weights);
+  for ( vit.rewind(); !vit.atEnd(); vit.advance() )
+  {
+    int i = vit.x(), j = vit.y(), k = vit.z();
+    auto vidx = v_blk_idx(i,j,k);
+    if (!isInSystem(vidx) || vit.getValue() == 0.0f)
+      continue;
+    auto pidx0 = p_blk_idx(i,j-1,k);
+    auto pidx1 = p_blk_idx(i,j,k);
+    if ( pidx0 == AIR && isInSystem(pidx1) )
+      ust[vidx] = -SYSlerp(sp(i,j,k), sp.getValue(i,j-1,k), vit.getValue());
+    else if ( pidx1 == AIR && isInSystem(pidx0) )
+      ust[vidx] = SYSlerp(sp.getValue(i,j-1,k), sp(i,j,k), vit.getValue());
+  }
+  vit.setConstArray(&w_weights);
+  for ( vit.rewind(); !vit.atEnd(); vit.advance() )
+  {
+    int i = vit.x(), j = vit.y(), k = vit.z();
+    auto widx = w_blk_idx(i,j,k);
+    if (!isInSystem(widx) || vit.getValue() == 0.0f)
+      continue;
+    auto pidx0 = p_blk_idx(i,j,k-1);
+    auto pidx1 = p_blk_idx(i,j,k);
+    if ( pidx0 == AIR && isInSystem(pidx1) )
+      ust[widx] = -SYSlerp(sp(i,j,k), sp.getValue(i,j,k-1), vit.getValue());
+    else if ( pidx1 == AIR && isInSystem(pidx0) )
+      ust[widx] = SYSlerp(sp.getValue(i,j,k-1), sp(i,j,k), vit.getValue());
+  }
+
+  return ust;
+}
+
 template<typename T>
 auto
 sim_stokesSolver<T>::buildSolidVelocityVector(const SIM_RawField * const *vel) const -> BlockVectorType
@@ -2400,7 +2677,6 @@ void sim_stokesSolver<T>::assembleBlockSystem(
     const BlockMatrixType& D,
     const BlockMatrixType& Pinv,
     const BlockMatrixType& Minv,
-    const BlockVectorType& pbc,
     BlockMatrixType& Ap,
     BlockMatrixType& Bp,
     BlockMatrixType& Hp,
@@ -2428,11 +2704,9 @@ void sim_stokesSolver<T>::assembleBlockSystem(
   Bt = dx*WLtDWFu;  // B where b = B*ustar
   Ht = (dt/dx)*WLuinv*PinvDtransposeWLt;  // H update matrix
 
-//  BlockVectorType ust = dt*Pinv*(G - WLuinv*G*WLp)*pbc;
-
   Ap = dt*WLpGtransposeWFu*WLuinv*PinvGWLp;
-  Bp = dx*WLpGtransposeWFu;  // B where b = B*ustar
-  Hp = (dt/dx)*WLuinv*PinvGWLp;// + ust;  // H update matrix
+  Bp = dx*WLpGtransposeWFu;     // B where b = B*ustar
+  Hp = (dt/dx)*WLuinv*PinvGWLp; // H update matrix
 }
 
 template<typename T>
@@ -2454,8 +2728,12 @@ void sim_stokesSolver<T>::assembleStressVelocitySystem(
 
 template<typename T>
 void sim_stokesSolver<T>::buildSystemBlockwise(
-    BlockMatrixType &matrix, BlockVectorType &rhs, BlockMatrixType &H,
+    BlockMatrixType &matrix,
+    BlockVectorType &rhs,
+    BlockMatrixType &H,
+    BlockVectorType &ust,
     const BlockVectorType &uold,
+    const SIM_RawField & surf,
     const SIM_RawField * const* valid,
     const SIM_RawField * const* surf_weights,
     const SIM_RawField * const* col_weights,
@@ -2499,7 +2777,7 @@ void sim_stokesSolver<T>::buildSystemBlockwise(
   BlockMatrixType WFu(myNumVelocityVars, myNumVelocityVars);
 
   buildDeformationRateOperator(D);
-  buildGradientOperator(G);
+  buildGradientOperator(u_vol_liquid, v_vol_liquid, w_vol_liquid, G);
   buildViscosityMatrix<true>(viscfield, Minv);
   buildDensityMatrix(valid, densfield, Pinv);
   buildPressureWeightMatrix(c_vol_liquid, WLp);
@@ -2522,12 +2800,10 @@ void sim_stokesSolver<T>::buildSystemBlockwise(
   WSp.setIdentity();
   WSp -= WFp;
 
-  BlockVectorType pbc = buildSurfaceTensionPressureVector(surf_pres);
-
   BlockMatrixType App;// = dt*WLp*G.transpose()*Pinv*WLuinv*WFu*G*WLp;
   BlockMatrixType Att;// = (dx*dx*0.5)*Minv*WLt*WFt + dt*WLt*D*Pinv*WLuinv*WFu*D.transpose()*WLt;
   BlockMatrixType Bp, Bt, Ht, Hp, Atp;
-  assembleBlockSystem(WLp, WLuinv, WFu, WLt, WFt, G, D, Pinv, Minv, pbc, App, Bp, Hp, Att, Bt, Ht);
+  assembleBlockSystem(WLp, WLuinv, WFu, WLt, WFt, G, D, Pinv, Minv, App, Bp, Hp, Att, Bt, Ht);
   Atp = dt*WLt*D*Pinv*WLuinv*WFu*G*WLp;
   assert(isMatrixValid(App));
   assert(isMatrixValid(Att));
@@ -2538,12 +2814,13 @@ void sim_stokesSolver<T>::buildSystemBlockwise(
   BlockVectorType ubc = buildSolidVelocityVector(solid_vel);
 
   // surface tension term
-  BlockVectorType ust = Pinv*(G - WLuinv*G*WLp)*pbc;
+  BlockVectorType pbc = buildSurfaceTensionPressureVector(surf_pres);
+  ust = dt*Pinv*(G - WLuinv*G*WLp)*pbc;
 
   rhs.resize(elts);
   rhs.setZero();
-  rhs << Bp*uold + dx*WLp*(G.transpose()*WSu - WSp*G.transpose())*ubc,// + dt*WLp*G.transpose()*ust,
-         Bt*uold + dx*WLt*(D*WSu - WSt*D)*ubc;// + dt*WLt*D*ust;
+  rhs << Bp*uold + dx*WLp*(G.transpose()*WSu - WSp*G.transpose())*ubc + WLp*G.transpose()*WFu*ust,
+         Bt*uold + dx*WLt*(D*WSu - WSt*D)*ubc + WLt*D*WFu*ust;
 
   triplets.clear();
   matrix.resize(elts,elts);
@@ -2551,7 +2828,16 @@ void sim_stokesSolver<T>::buildSystemBlockwise(
   // Copy App matrix
   for ( int k = 0; k < App.outerSize(); ++k )
     for ( typename BlockMatrixType::InnerIterator it(App,k); it; ++it )
-      triplets.emplace_back(it.row(), it.col(), it.value());
+    {
+      if ( WLp.coeff(it.row(),it.row()) < 1.0 || WLp.coeff(it.col(), it.col()) < 1.0 )
+      {
+        if ( it.row() == it.col() )
+          triplets.emplace_back(it.row(), it.col(), 1.0); // already solved surface pressure
+        // else the entry is zero
+      }
+      else
+        triplets.emplace_back(it.row(), it.col(), it.value());
+    }
 
   // Copy Att matrix
   for ( int k = 0; k < Att.outerSize(); ++k )
@@ -2568,18 +2854,24 @@ void sim_stokesSolver<T>::buildSystemBlockwise(
     {
       int row = it.row() + myNumPressureVars;
       int col = it.col();
-      triplets.emplace_back(row, col, it.value());
-      triplets.emplace_back(col, row, it.value()); // transpose
+      if ( WLp.coeff(it.col(), it.col()) == 1.0 )
+      {
+        triplets.emplace_back(row, col, it.value());
+        triplets.emplace_back(col, row, it.value()); // transpose
+      }
     }
 
   matrix.setFromTriplets(triplets.begin(), triplets.end());
 
   triplets.clear();
 
-  // Copy Atp matrix
+  // Copy Hp and Ht matrices matrix
   for ( int k = 0; k < Hp.outerSize(); ++k )
     for ( typename BlockMatrixType::InnerIterator it(Hp,k); it; ++it )
-      triplets.emplace_back(it.row(), it.col(), it.value());
+    {
+      if ( WLp.coeff(it.col(), it.col()) == 1.0 )
+        triplets.emplace_back(it.row(), it.col(), it.value());
+    }
 
   for ( int k = 0; k < Ht.outerSize(); ++k )
     for ( typename BlockMatrixType::InnerIterator it(Ht,k); it; ++it )
@@ -2590,9 +2882,88 @@ void sim_stokesSolver<T>::buildSystemBlockwise(
 }
 
 template<typename T>
+void
+sim_stokesSolver<T>::pinDirichletPressure(
+    BlockMatrixType& A,
+    BlockVectorType& b,
+    T p,
+    int idx) const
+{
+  b( idx ) = p;
+
+  for ( typename BlockMatrixType::InnerIterator it(A,idx); it; ++it )
+  {
+    auto& mtx_val = it.valueRef();
+    if ( it.row() == it.col() )
+    {
+      mtx_val = 1.0;
+      continue;
+    }
+
+    if ( mtx_val == 0.0 )
+      continue;
+
+    // adjust the RHS to account for the actual boundary values
+    b( it.row() ) -= mtx_val * p;
+
+    // eliminate the remaining entries, symmetrically
+    mtx_val = 0.0;
+    A.coeffRef( it.col(), it.row() ) = 0.0;
+  }
+}
+
+template<typename T>
+void
+sim_stokesSolver<T>::applyDirichletBoundary(
+    BlockMatrixType& A,
+    BlockVectorType& b,
+    const BlockVectorType& p,
+    const UT_VoxelArrayF& c_vol_liquid) const // enforce only on boundary cells
+{
+  UT_VoxelArrayIteratorF vit;
+  vit.setConstArray(&c_vol_liquid);
+  for ( vit.rewind(); !vit.atEnd(); vit.advance() )
+  {
+    int i = vit.x(), j = vit.y(), k = vit.z();
+    if( c_vol_liquid(i,j,k) == 1.0 || c_vol_liquid(i,j,k) == 0.0 )
+      continue;
+
+    int idx = p_blk_idx(i,j,k);
+    if ( isInSystem(idx) )
+      pinDirichletPressure(A, b, p[idx], idx);
+  }
+}
+
+template<typename T>
+auto
+sim_stokesSolver<T>::buildSurfaceTensionRHS(
+    const SIM_RawField * const* valid,
+    const SIM_RawField * const* surf_weights,
+    const SIM_RawField * const* col_weights,
+    const SIM_RawField & densfield,
+    const BlockVectorType &ust) const -> BlockVectorType
+{
+  assert(myScheme != STOKES);
+
+  const UT_VoxelArrayF &u_vol_liquid = *surf_weights[4]->field();
+  const UT_VoxelArrayF &v_vol_liquid = *surf_weights[5]->field();
+  const UT_VoxelArrayF &w_vol_liquid = *surf_weights[6]->field();
+
+  BlockMatrixType Pinv(myNumVelocityVars, myNumVelocityVars);
+  BlockMatrixType WLuinv(myNumVelocityVars, myNumVelocityVars);
+
+  buildDensityMatrix(valid, densfield, Pinv);
+  buildVelocityWeightMatrix<true>(u_vol_liquid, v_vol_liquid, w_vol_liquid, WLuinv);
+
+  BlockVectorType st_rhs = dt * Pinv * WLuinv * ust;
+  return st_rhs;
+}
+
+template<typename T>
 void sim_stokesSolver<T>::buildDecoupledSystem(
     BlockMatrixType &At, BlockMatrixType &Bt, BlockMatrixType &Ht,
     BlockMatrixType &Ap, BlockMatrixType &Bp, BlockMatrixType &Hp,
+    const SIM_RawField & surf,
     const SIM_RawField * const* valid,
     const SIM_RawField * const* surf_weights,
     const SIM_RawField * const* col_weights,
@@ -2630,7 +3001,7 @@ void sim_stokesSolver<T>::buildDecoupledSystem(
   BlockMatrixType WFu(myNumVelocityVars, myNumVelocityVars);
 
   buildDeformationRateOperator(D);
-  buildGradientOperator(G);
+  buildGradientOperator(u_vol_liquid, v_vol_liquid, w_vol_liquid, G);
   buildViscosityMatrix<true>(viscfield, Minv);
   buildDensityMatrix(valid, densfield, Pinv);
 
@@ -2640,8 +3011,52 @@ void sim_stokesSolver<T>::buildDecoupledSystem(
   buildStressWeightMatrix<false>(c_vol_fluid, ex_vol_fluid, ey_vol_fluid, ez_vol_fluid, WFt);
   buildVelocityWeightMatrix<false>(u_vol_fluid, v_vol_fluid, w_vol_fluid, WFu);
 
-  BlockVectorType pbc = buildSurfaceTensionPressureVector(surf_pres);
-  assembleBlockSystem(WLp, WLuinv, WFu, WLt, WFt, G, D, Pinv, Minv, pbc, Ap, Bp, Hp, At, Bt, Ht);
+  assembleBlockSystem(WLp, WLuinv, WFu, WLt, WFt, G, D, Pinv, Minv, Ap, Bp, Hp, At, Bt, Ht);
+}
+
+template<typename T>
+void sim_stokesSolver<T>::buildPressureOnlySystem(
+    BlockMatrixType &A, BlockMatrixType &B, BlockMatrixType &H,
+    const SIM_RawField & surf,
+    const SIM_RawField * const* valid,
+    const SIM_RawField * const* surf_weights,
+    const SIM_RawField * const* col_weights,
+    const SIM_RawField &densfield,
+    const SIM_RawField * const* solid_vel,
+    const SIM_RawField & surf_pres) const
+{
+  assert(myScheme != STOKES);
+
+  const UT_VoxelArrayF &u_vol_liquid = *surf_weights[4]->field();
+  const UT_VoxelArrayF &v_vol_liquid = *surf_weights[5]->field();
+  const UT_VoxelArrayF &w_vol_liquid = *surf_weights[6]->field();
+
+  const UT_VoxelArrayF &u_vol_fluid = *col_weights[4]->field();
+  const UT_VoxelArrayF &v_vol_fluid = *col_weights[5]->field();
+  const UT_VoxelArrayF &w_vol_fluid = *col_weights[6]->field();
+
+  BlockMatrixType Ggf(myNumVelocityVars, myNumPressureVars);
+  BlockMatrixType G(myNumVelocityVars, myNumPressureVars);
+  BlockMatrixType GF(myNumVelocityVars, myNumVelocityVars);
+  BlockMatrixType Pinv(myNumVelocityVars, myNumVelocityVars);
+
+  BlockMatrixType WFt(myNumStressVars, myNumStressVars);
+  BlockMatrixType WLuinv(myNumVelocityVars, myNumVelocityVars);
+  BlockMatrixType WFu(myNumVelocityVars, myNumVelocityVars);
+
+  buildGhostFluidMatrix(u_vol_liquid, v_vol_liquid, w_vol_liquid, GF);
+  //buildGradientOperator(u_vol_liquid, v_vol_liquid, w_vol_liquid, Ggf);
+  buildGradientOperator(G);
+
+  buildDensityMatrix(valid, densfield, Pinv);
+  buildVelocityWeightMatrix<true>(u_vol_liquid, v_vol_liquid, w_vol_liquid, WLuinv);
+  buildVelocityWeightMatrix<false>(u_vol_fluid, v_vol_fluid, w_vol_fluid, WFu);
+
+  BlockMatrixType GTWFu = G.transpose()*WFu;
+  BlockMatrixType PinvG = Pinv*GF*G;
+  A = dt*GTWFu*PinvG;
+  B = dx*GTWFu;     // B where b = B*ustar
+  H = (dt/dx)*PinvG; // H update matrix
 }
 
 template<typename T>
@@ -2734,7 +3149,7 @@ sim_stokesSolver<T>::removeNullSpace(const MatrixType &matrix, const VectorType 
   //      continue;
 
   //    mtx_val = 0.0;
-  //    if ( M.coeff( it.col(), it.row() != 0.0 ) )
+  //    if ( M.coeff( it.col(), it.row() ) != 0.0 )
   //        M.coeffRef( it.col(), it.row() ) = 0.0;
   //  }
   //}
@@ -2841,6 +3256,7 @@ sim_stokesSolver<T>::copySystem(
 template<typename T>
 SolverResult
 sim_stokesSolver<T>::solveBlockwiseStokes(
+    const SIM_RawField & surf,
     const SIM_RawField * const* valid,
     const SIM_RawField * const* sweights,
     const SIM_RawField * const* cweights,
@@ -2856,14 +3272,16 @@ sim_stokesSolver<T>::solveBlockwiseStokes(
   BlockMatrixType A, H;
   BlockVectorType b(system_size);
   BlockVectorType uold = buildVelocityVector(valid, vel, solid_vel);
+  BlockVectorType ust(getNumVelocityVars());
   {
-    UT_PerfMonAutoSolveEvent event(&mySolver, "Build Blockwise System");
-    buildSystemBlockwise(A, b, H, uold, valid, sweights, cweights, viscfield, densfield, solid_vel, surf_pres);
+    UT_PerfMonAutoSolveEvent event(&mySolver, "Build System Blockwise");
+    buildSystemBlockwise(A, b, H, ust, uold, surf, valid, sweights, cweights, viscfield, densfield, solid_vel, surf_pres);
     A.prune(0, 0);
     A.makeCompressed();
   }
 
 #ifndef NDEBUG
+  // check that A has no empty columns (or rows since it's symmetric)
   for (int k = 0; k < A.outerSize(); ++k )
   {
     typename BlockMatrixType::InnerIterator it(A,k);
@@ -2871,11 +3289,11 @@ sim_stokesSolver<T>::solveBlockwiseStokes(
   }
 #endif
 
-#ifdef USE_EIGEN_FOR_BLOCKWISE
+#ifdef USE_EIGEN_SOLVER_FOR_BLOCKWISE_STOKES
   BlockVectorType x(system_size);
   auto result = solveSystemEigen(A,b,x);
   if (result == SUCCESS)
-    updateVelocitiesBlockwise(uold - H*x, valid, solid_vel, vel);
+    updateVelocitiesBlockwise(uold - H*x + ust, valid, solid_vel, vel);
 #else
   // 29 is the max non zeros per row in the stokes system
   MatrixType Ah(system_size, 29);
