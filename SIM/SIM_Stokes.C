@@ -325,10 +325,14 @@ public:
   auto buildGhostFluidSurfaceTensionPressureVector(
       const SIM_RawField * const* surf_weights,
       const SIM_RawField & surfp) const -> BlockVectorType;
+  auto buildSurfaceTensionRHSAlt(
+      const SIM_RawField * const* valid,
+      const SIM_RawField * const* surf_weights,
+      const SIM_RawField & density,
+      const BlockVectorType &pbc) const -> BlockVectorType;
   auto buildSurfaceTensionRHS(
       const SIM_RawField * const* valid,
       const SIM_RawField * const* surf_weights,
-      const SIM_RawField * const* col_weights,
       const SIM_RawField & density,
       const BlockVectorType &ust) const -> BlockVectorType;
 
@@ -1065,7 +1069,7 @@ sim_stokesSolver<T>::solve(
     }
     // enforce surface tension pressure boundary conditions
     BlockVectorType gfst = buildGhostFluidSurfaceTensionPressureVector(sweights, surfpres);
-    BlockVectorType ust = buildSurfaceTensionRHS(valid, sweights, cweights, density, gfst);
+    BlockVectorType ust = buildSurfaceTensionRHS(valid, sweights, density, gfst);
     // build remaining necessary operators
     BlockMatrixType WFu(myNumVelocityVars, myNumVelocityVars);
     const UT_VoxelArrayF &u_vol_fluid = *cweights[4]->field();
@@ -2772,15 +2776,29 @@ void sim_stokesSolver<T>::buildSystemBlockwise(
   // moving boundary term
   BlockVectorType ubc = buildSolidVelocityVector(solid_vel);
 
+//////
+// TODO: verify that the ust from the two lines below is the same as the ust
+// we actually use. To do this we have to modify
+// buildSurfaceTensionPressureVector to include pressures at air cells and
+// exclude other interior pressures (not near the surface). This will show that
+// we can compute ghost pressures (gfst) using the formula:
+//    (WLu*G - G*WLp)*pbc
+// in the same fashion we compute the boundary velocity condition
+// (We can also do this on paper, what what's the fun in that :P)
+//////
+//  BlockVectorType pbc = buildSurfaceTensionPressureVector(surf_pres);
+//  ust = buildSurfaceTensionRHSAlt(valid, surf_weights, densfield, pbc);
+//////
+
   // surface tension term
   BlockVectorType gfst = buildGhostFluidSurfaceTensionPressureVector(surf_weights, surf_pres);
-  ust = buildSurfaceTensionRHS(valid, surf_weights, col_weights, densfield, gfst);
+  ust = buildSurfaceTensionRHS(valid, surf_weights, densfield, gfst);
   //ust = dt*Pinv*(G - WLuinv*G*WLp)*pbc;
 
   rhs.resize(elts);
   rhs.setZero();
   rhs << Bp*uold + dx*WLp*(G.transpose()*WSu - WSp*G.transpose())*ubc + WLp*G.transpose()*WFu*ust,
-         Bt*uold + dx*WLt*(D*WSu - WSt*D)*ubc;// + WLt*D*WFu*ust;
+         Bt*uold + dx*WLt*(D*WSu - WSt*D)*ubc + WLt*D*WFu*ust;
 
   triplets.clear();
   matrix.resize(elts,elts);
@@ -2788,16 +2806,7 @@ void sim_stokesSolver<T>::buildSystemBlockwise(
   // Copy App matrix
   for ( int k = 0; k < App.outerSize(); ++k )
     for ( typename BlockMatrixType::InnerIterator it(App,k); it; ++it )
-    {
-      if ( WLp.coeff(it.row(),it.row()) < 1.0 || WLp.coeff(it.col(), it.col()) < 1.0 )
-      {
-        if ( it.row() == it.col() )
-          triplets.emplace_back(it.row(), it.col(), 1.0); // already solved surface pressure
-        // else the entry is zero
-      }
-      else
-        triplets.emplace_back(it.row(), it.col(), it.value());
-    }
+      triplets.emplace_back(it.row(), it.col(), it.value());
 
   // Copy Att matrix
   for ( int k = 0; k < Att.outerSize(); ++k )
@@ -2814,11 +2823,8 @@ void sim_stokesSolver<T>::buildSystemBlockwise(
     {
       int row = it.row() + myNumPressureVars;
       int col = it.col();
-      if ( WLp.coeff(it.col(), it.col()) == 1.0 )
-      {
-        triplets.emplace_back(row, col, it.value());
-        triplets.emplace_back(col, row, it.value()); // transpose
-      }
+      triplets.emplace_back(row, col, it.value());
+      triplets.emplace_back(col, row, it.value()); // transpose
     }
 
   matrix.setFromTriplets(triplets.begin(), triplets.end());
@@ -2828,10 +2834,7 @@ void sim_stokesSolver<T>::buildSystemBlockwise(
   // Copy Hp and Ht matrices matrix
   for ( int k = 0; k < Hp.outerSize(); ++k )
     for ( typename BlockMatrixType::InnerIterator it(Hp,k); it; ++it )
-    {
-      if ( WLp.coeff(it.col(), it.col()) == 1.0 )
-        triplets.emplace_back(it.row(), it.col(), it.value());
-    }
+      triplets.emplace_back(it.row(), it.col(), it.value());
 
   for ( int k = 0; k < Ht.outerSize(); ++k )
     for ( typename BlockMatrixType::InnerIterator it(Ht,k); it; ++it )
@@ -2896,10 +2899,37 @@ sim_stokesSolver<T>::applyDirichletBoundary(
 
 template<typename T>
 auto
+sim_stokesSolver<T>::buildSurfaceTensionRHSAlt(
+    const SIM_RawField * const* valid,
+    const SIM_RawField * const* surf_weights,
+    const SIM_RawField & densfield,
+    const BlockVectorType &pbc) const -> BlockVectorType
+{
+  assert(myScheme != STOKES);
+
+  const UT_VoxelArrayF &c_vol_liquid = *surf_weights[0]->field();
+  const UT_VoxelArrayF &u_vol_liquid = *surf_weights[4]->field();
+  const UT_VoxelArrayF &v_vol_liquid = *surf_weights[5]->field();
+  const UT_VoxelArrayF &w_vol_liquid = *surf_weights[6]->field();
+
+  BlockMatrixType G(myNumVelocityVars, myNumPressureVars);
+  BlockMatrixType Pinv(myNumVelocityVars, myNumVelocityVars);
+  BlockMatrixType WLp(myNumPressureVars, myNumPressureVars);
+  BlockMatrixType WLuinv(myNumVelocityVars, myNumVelocityVars);
+
+  buildGradientOperator(G);
+  buildDensityMatrix(valid, densfield, Pinv);
+  buildVelocityWeightMatrix<true>(u_vol_liquid, v_vol_liquid, w_vol_liquid, WLuinv);
+  buildPressureWeightMatrix(c_vol_liquid, WLp);
+
+  return dt*Pinv*(G - WLuinv*G*WLp)*pbc;
+}
+
+template<typename T>
+auto
 sim_stokesSolver<T>::buildSurfaceTensionRHS(
     const SIM_RawField * const* valid,
     const SIM_RawField * const* surf_weights,
-    const SIM_RawField * const* col_weights,
     const SIM_RawField & densfield,
     const BlockVectorType &ust) const -> BlockVectorType
 {
@@ -2915,13 +2945,8 @@ sim_stokesSolver<T>::buildSurfaceTensionRHS(
   buildDensityMatrix(valid, densfield, Pinv);
   buildVelocityWeightMatrix<true>(u_vol_liquid, v_vol_liquid, w_vol_liquid, WLuinv);
 
-  //ust = dt*Pinv*(G - WLuinv*G*WLp)*pbc;
-  if ( myScheme == STOKES )
-  {
-    return (-dt) * Pinv * WLuinv * ust;
-  }
-  else
-    return (-dt) * Pinv * WLuinv * ust;
+  // dt*Pinv*(G - WLuinv*G*WLp)*pbc;
+  return (-dt) * Pinv * WLuinv * ust;
 }
 
 template<typename T>
