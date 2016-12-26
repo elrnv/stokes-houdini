@@ -41,10 +41,10 @@ enum FieldIndex
 
 enum SolveType
 {
+  COLLISION = -3,
   AIR = -2,
-  INVALIDIDX = -1, // negative types do not get an index
-  SOLVED = 1, // positive types get an index
-  COLLISION = 2
+  INVALIDIDX = -1,
+  SOLVED = 1,
 };
 
 enum SolverResult
@@ -74,6 +74,7 @@ public:
     , myNumStressVars(0)
     , myNumVelocityVars(0)
     , myNumPressureVars(0)
+    , myCollisionIndex(0)
     , myScheme(solver.getScheme())
     , mySolver(solver)
     , myObject(obj)
@@ -85,6 +86,9 @@ public:
       int i, int j, int k,
       FieldIndex fidx) const;
   bool isInSystem(exint idx) const { return idx >= 0; }
+
+  // return true if eelocity index represents a collision velocity in the system
+  bool isCollision(exint idx) const { return idx == COLLISION || idx >= myCollisionIndex; }
 
 
   // build member index fields
@@ -101,35 +105,24 @@ public:
                    SIM_RawIndexField &index,
                    FieldIndex fidx,
                    const UT_JobInfo &info);
-  void buildIndex(const SIM_RawField * const* surf_weights,
+  void initAndClassifyIndex(
+                  const SIM_RawField * const* surf_weights,
                   const SIM_RawField * const* col_weights,
                   SIM_RawIndexField &index,
+                  FieldIndex fidx);
+  void buildIndex(SIM_RawIndexField &index,
                   FieldIndex fidx,
                   exint &maxindex);
+  void buildCollisionIndex(SIM_RawIndexField &index,
+                           FieldIndex fidx,
+                           exint &maxindex);
 
-  void buildIndicesDecoupled(
+  void buildVelocityIndices(
       const SIM_RawField * const* surf_weights,
       const SIM_RawField * const* col_weights);
   void buildIndices(
       const SIM_RawField * const* surf_weights,
       const SIM_RawField * const* col_weights);
-
-  THREADED_METHOD4_CONST(sim_stokesSolver, validfield.shouldMultiThread(),
-                         computeValidity,
-                         SIM_RawField&, validfield,
-                         const SIM_RawField * const*, surf_weights,
-                         const SIM_RawField * const*, col_weights,
-                         FieldIndex, fidx);
-  void computeValidityPartial(
-                         SIM_RawField& validfield,
-                         const SIM_RawField * const*surf_weights,
-                         const SIM_RawField * const*col_weights,
-                         FieldIndex fidx,
-                         const UT_JobInfo& info) const;
-  void computeValidities(SIM_RawField * const* validfields,
-                         const SIM_RawField * const* surf_weights,
-                         const SIM_RawField * const* col_weights,
-                         const SIM_VectorField & vel) const;
 
   void buildSystemBlockwise(
       BlockMatrixType &matrix, BlockVectorType &rhs, BlockMatrixType &H, BlockVectorType &ust,
@@ -142,16 +135,6 @@ public:
       const SIM_RawField * const* solid_vel,
       const SIM_RawField & surf_pres) const;
 
-  void pinDirichletPressure(
-      BlockMatrixType& A,
-      BlockVectorType& b,
-      T p,
-      int idx) const;
-  void applyDirichletBoundary(
-      BlockMatrixType& A,
-      BlockVectorType& b,
-      const BlockVectorType& p,
-      const UT_VoxelArrayF& c_vol_liquid) const;
   void buildDecoupledSystem(
       BlockMatrixType &,  BlockMatrixType &, BlockMatrixType &,
       BlockMatrixType &,  BlockMatrixType &, BlockMatrixType &,
@@ -551,13 +534,18 @@ public:
 #endif
     return myNumVelocityVars;
   }
+  int getNumCollisionVelocityVars() const 
+  {
+    myNumVelocityVars - myCollisionIndex;
+  }
 
 private: // data members
   int     ni, nj, nk;
   float   dx, dt;
   int     myNumPressureVars;
-  int     myNumVelocityVars;
+  int     myNumVelocityVars; // including collision vars
   int     myNumStressVars;
+  int     myCollisionIndex; // first velocity collision index (used in decoupled and blockwise solves)
   Scheme  myScheme;
   SIM_Stokes& mySolver;
   SIM_Object* myObject;
@@ -1115,13 +1103,15 @@ sim_stokesSolver<T>::solve(
 template<typename T>
 void
 sim_stokesSolver<T>::addUTerm(int row_index, int i, int j, int k, float sign, float outer_liquid, float outer_fluid,
-                           const sim_buildSystemParms& parms,
-                           UT_VoxelProbeAverage<float,-1,0,0>& rhox,
-                           UT_Array<RowEntry>& rowentries,
-                           VectorType& b) const
+                              const sim_buildSystemParms& parms,
+                              UT_VoxelProbeAverage<float,-1,0,0>& rhox,
+                              UT_Array<RowEntry>& rowentries,
+                              VectorType& b) const
 {
   int idx = myUIndex(i,j,k);
-  if (idx == SOLVED)
+  if (isCollision(idx))
+    b(row_index) -= sign * outer_liquid * parms.u_vol_fluid(i,j,k) * parms.u_solid.getValue(i,j,k) * dx;
+  else if (isInSystem(idx))
   {
     rhox.setIndex(i,j,k);
     auto rho = SYSclamp(rhox.getValue(), parms.minrho, parms.maxrho);
@@ -1146,8 +1136,6 @@ sim_stokesSolver<T>::addUTerm(int row_index, int i, int j, int k, float sign, fl
     //u*
     b(row_index) -= sign * outer_liquid * parms.u_vol_fluid(i,j,k) * parms.u(i,j,k) * dx;
   }
-  else if (idx == COLLISION)
-    b(row_index) -= sign * outer_liquid * parms.u_vol_fluid(i,j,k) * parms.u_solid.getValue(i,j,k) * dx;
 
   b(row_index) -= sign * outer_liquid * (1.0-parms.u_vol_fluid(i,j,k)) * parms.u_solid.getValue(i,j,k) * dx;
   b(row_index) -= sign * outer_liquid * (1.0-outer_fluid) * parms.u_solid.getValue(i,j,k) * dx;
@@ -1156,13 +1144,15 @@ sim_stokesSolver<T>::addUTerm(int row_index, int i, int j, int k, float sign, fl
 template<typename T>
 void
 sim_stokesSolver<T>::addVTerm(int row_index, int i, int j, int k, float sign, float outer_liquid, float outer_fluid,
-                           const sim_buildSystemParms& parms,
-                           UT_VoxelProbeAverage<float,0,-1,0>& rhoy,
-                           UT_Array<RowEntry>& rowentries,
-                           VectorType& b) const
+                              const sim_buildSystemParms& parms,
+                              UT_VoxelProbeAverage<float,0,-1,0>& rhoy,
+                              UT_Array<RowEntry>& rowentries,
+                              VectorType& b) const
 {
   int idx = myVIndex(i,j,k);
-  if (idx == SOLVED)
+  if (isCollision(idx))
+    b(row_index) -=  sign * outer_liquid * parms.v_vol_fluid(i,j,k) * parms.v_solid.getValue(i,j,k) * dx;
+  else if (isInSystem(idx))
   {
     rhoy.setIndex(i,j,k);
     auto rho = SYSclamp(rhoy.getValue(), parms.minrho, parms.maxrho);
@@ -1177,8 +1167,8 @@ sim_stokesSolver<T>::addVTerm(int row_index, int i, int j, int k, float sign, fl
     if(txy_idx(i,   j,   k) >= 0)   rowentries.emplace_back(txy_idx(i,   j,   k),   -factor * parms.ez_vol_liquid(i,   j,   k));
 
     //dtyy/dy
-    if(tyy_idx(i,   j,   k) >= 0)   rowentries.emplace_back(tyy_idx(i,   j,   k),   +factor *  parms.c_vol_liquid(i,   j,   k));
-    if(tyy_idx(i,   j-1, k) >= 0)   rowentries.emplace_back(tyy_idx(i,   j-1, k),   -factor *  parms.c_vol_liquid(i,   j-1, k));
+    if(tyy_idx(i,   j,   k) >= 0)   rowentries.emplace_back(tyy_idx(i,   j,   k),   +factor * parms.c_vol_liquid(i,   j,   k));
+    if(tyy_idx(i,   j-1, k) >= 0)   rowentries.emplace_back(tyy_idx(i,   j-1, k),   -factor * parms.c_vol_liquid(i,   j-1, k));
 
     //dtyz/dz
     if(tyz_idx(i,   j,   k+1) >= 0) rowentries.emplace_back(tyz_idx(i,   j,   k+1), +factor * parms.ex_vol_liquid(i,   j,   k+1));
@@ -1186,8 +1176,6 @@ sim_stokesSolver<T>::addVTerm(int row_index, int i, int j, int k, float sign, fl
 
     b(row_index) -= sign * outer_liquid * parms.v_vol_fluid(i,j,k) * parms.v(i,j,k) * dx;
   }
-  else if (idx == COLLISION)
-    b(row_index) -=  sign * outer_liquid * parms.v_vol_fluid(i,j,k) * parms.v_solid.getValue(i,j,k) * dx;
 
   b(row_index) -= sign * outer_liquid * (1.0-parms.v_vol_fluid(i,j,k)) * parms.v_solid.getValue(i,j,k) * dx;
   b(row_index) -= sign * outer_liquid * (1.0-outer_fluid) * parms.v_solid.getValue(i,j,k) * dx;
@@ -1196,13 +1184,15 @@ sim_stokesSolver<T>::addVTerm(int row_index, int i, int j, int k, float sign, fl
 template<typename T>
 void
 sim_stokesSolver<T>::addWTerm(int row_index, int i, int j, int k, float sign, float outer_liquid, float outer_fluid,
-                           const sim_buildSystemParms& parms,
-                           UT_VoxelProbeAverage<float,0,0,-1>& rhoz,
-                           UT_Array<RowEntry>& rowentries,
-                           VectorType& b) const
+                              const sim_buildSystemParms& parms,
+                              UT_VoxelProbeAverage<float,0,0,-1>& rhoz,
+                              UT_Array<RowEntry>& rowentries,
+                              VectorType& b) const
 {
   int idx = myWIndex(i,j,k);
-  if (idx == SOLVED)
+  if (isCollision(idx))
+    b(row_index) -= sign * outer_liquid * parms.w_vol_fluid(i,j,k) * parms.w_solid.getValue(i,j,k) * dx;
+  else if (isInSystem(idx))
   {
     rhoz.setIndex(i,j,k);
     auto rho = SYSclamp(rhoz.getValue(), parms.minrho, parms.maxrho);
@@ -1229,8 +1219,6 @@ sim_stokesSolver<T>::addWTerm(int row_index, int i, int j, int k, float sign, fl
 
     b(row_index) -= sign * outer_liquid * parms.w_vol_fluid(i,j,k) * parms.w(i,j,k) * dx;
   }
-  else if (idx == COLLISION)
-    b(row_index) -= sign * outer_liquid * parms.w_vol_fluid(i,j,k) * parms.w_solid.getValue(i,j,k) * dx;
 
   b(row_index) -= sign * outer_liquid * (1.0-parms.w_vol_fluid(i,j,k)) * parms.w_solid.getValue(i,j,k) * dx;
   b(row_index) -= sign * outer_liquid * (1.0-outer_fluid) * parms.w_solid.getValue(i,j,k) * dx;
@@ -1668,50 +1656,6 @@ SolveType sim_stokesSolver<T>::solveType(
     return insystem ? SOLVED : INVALIDIDX; // needed for moving boundaries (gets an index in blockwise code)
 }
 
-// PRE: fidx is one of FACEX, FACEY or FACEZ. If not, reconsider the solveType
-// function above
-template<typename T>
-void
-sim_stokesSolver<T>::computeValidityPartial(
-    SIM_RawField& validfield,
-    const SIM_RawField * const* surf_weights,
-    const SIM_RawField * const* col_weights,
-    FieldIndex fidx,
-    const UT_JobInfo& info) const
-{
-  // Determine which data values should be valid based on volume fractions
-  UT_VoxelArrayIteratorF vit(validfield.fieldNC());
-  vit.splitByTile(info);
-  for (vit.rewind(); !vit.atEnd(); vit.advance())
-  {
-    int i = vit.x(), j = vit.y(), k = vit.z();
-    if ( solveType(surf_weights, col_weights, i, j, k, fidx) == SOLVED )
-      vit.setValue(1);
-  }
-}
-
-
-template<typename T>
-void
-sim_stokesSolver<T>::computeValidities(
-    SIM_RawField * const* validfields,
-    const SIM_RawField * const* sweights,
-    const SIM_RawField * const* cweights,
-    const SIM_VectorField & vel) const
-{
-  for ( int axis = 0; axis < 3; ++axis )
-  {
-    SIM_RawField &valid = *validfields[axis];
-    valid.match(*vel.getField(axis));
-    valid.makeConstant(0);
-    valid.setBorder(UT_VOXELBORDER_CONSTANT, 0);
-  }
-
-  computeValidity(*validfields[0], sweights, cweights, FACEX);
-  computeValidity(*validfields[1], sweights, cweights, FACEY);
-  computeValidity(*validfields[2], sweights, cweights, FACEZ);
-}
-
 
 template<typename T>
 void
@@ -1739,19 +1683,26 @@ sim_stokesSolver<T>::classifyIndexFieldPartial(
 
 template<typename T>
 void
-sim_stokesSolver<T>::buildIndex(
+sim_stokesSolver<T>::initAndClassifyIndex(
     const SIM_RawField * const* surf_weights,
     const SIM_RawField * const* col_weights,
     SIM_RawIndexField &index,
-    FieldIndex fidx,
-    exint &maxindex)
+    FieldIndex fidx)
 {
   index.match(*surf_weights[fidx]);
   index.makeConstant(INVALIDIDX);
   index.setBorder(UT_VOXELBORDER_CONSTANT, INVALIDIDX);
 
   classifyIndexField(surf_weights, col_weights, index, fidx);
+}
 
+template<typename T>
+void
+sim_stokesSolver<T>::buildIndex(
+    SIM_RawIndexField &index,
+    FieldIndex fidx,
+    exint &maxindex)
+{
   UT_VoxelArrayIteratorI vit(index.fieldNC());
   UT_VoxelTileIteratorI vitt;
   for (vit.rewind(); !vit.atEnd(); vit.advanceTile())
@@ -1768,43 +1719,84 @@ sim_stokesSolver<T>::buildIndex(
   }
 }
 
+// PRE: assume indices have already been classified
+template<typename T>
+void
+sim_stokesSolver<T>::buildCollisionIndex(
+    SIM_RawIndexField &index,
+    FieldIndex fidx,
+    exint &maxindex)
+{
+  UT_VoxelArrayIteratorI vit(index.fieldNC());
+  UT_VoxelTileIteratorI vitt;
+  for (vit.rewind(); !vit.atEnd(); vit.advanceTile())
+  {
+    if ( vit.isTileConstant() && !isCollision(vit.getValue()) )
+      continue;
+
+    vitt.setTile(vit);
+    for (vitt.rewind(); !vitt.atEnd(); vitt.advance())
+    {
+      if ( isCollision(vitt.getValue()) )
+        vitt.setValue(maxindex++);
+    }
+  }
+}
+
 template<typename T>
 void
 sim_stokesSolver<T>::buildIndices(
     const SIM_RawField * const* surf_weights,
     const SIM_RawField * const* col_weights)
 {
+  initAndClassifyIndex(surf_weights, col_weights, myCentralIndex, CENTER);
+  initAndClassifyIndex(surf_weights, col_weights, myTxyIndex, EDGEXY);
+  initAndClassifyIndex(surf_weights, col_weights, myTxzIndex, EDGEXZ);
+  initAndClassifyIndex(surf_weights, col_weights, myTyzIndex, EDGEYZ);
+
   exint maxindex = 0;
-  buildIndex(surf_weights, col_weights, myCentralIndex, CENTER, maxindex);
+  buildIndex(myCentralIndex, CENTER, maxindex);
   myNumPressureVars += maxindex;
   maxindex *= 3; // account for txx and tyy indices
-  buildIndex(surf_weights, col_weights, myTxyIndex, EDGEXY, maxindex);
-  buildIndex(surf_weights, col_weights, myTxzIndex, EDGEXZ, maxindex);
-  buildIndex(surf_weights, col_weights, myTyzIndex, EDGEYZ, maxindex);
+  buildIndex(myTxyIndex, EDGEXY, maxindex);
+  buildIndex(myTxzIndex, EDGEXZ, maxindex);
+  buildIndex(myTyzIndex, EDGEYZ, maxindex);
   myNumStressVars += maxindex - myNumPressureVars;
 
-  buildIndicesDecoupled(surf_weights, col_weights);
+  buildVelocityIndices(surf_weights, col_weights);
+
+  if ( !reduced_stress_tensor() )
+    myNumStressVars += myNumPressureVars; // for tzz
 }
 
 // Additional indices for decoupled systems
 template<typename T>
 void
-sim_stokesSolver<T>::buildIndicesDecoupled(
+sim_stokesSolver<T>::buildVelocityIndices(
     const SIM_RawField * const* surf_weights,
     const SIM_RawField * const* col_weights)
 {
 #ifndef BLOCKWISE_STOKES
   assert(myScheme != STOKES);
 #endif
+  initAndClassifyIndex(surf_weights, col_weights, myUIndex, FACEX);
+  initAndClassifyIndex(surf_weights, col_weights, myVIndex, FACEY);
+  initAndClassifyIndex(surf_weights, col_weights, myWIndex, FACEZ);
+
   // Velocity indices start from 0 as they are local to their block because they
   // are only used in the blockwise system builder
   exint maxindex = 0;
-  buildIndex(surf_weights, col_weights, myUIndex, FACEX, maxindex);
-  buildIndex(surf_weights, col_weights, myVIndex, FACEY, maxindex);
-  buildIndex(surf_weights, col_weights, myWIndex, FACEZ, maxindex);
+  buildIndex(myUIndex, FACEX, maxindex);
+  buildIndex(myVIndex, FACEY, maxindex);
+  buildIndex(myWIndex, FACEZ, maxindex);
+
+  myCollisionIndex = maxindex;
+
+  // build Collision Velocity indices
+  buildCollisionIndex(myUIndex, FACEX, maxindex);
+  buildCollisionIndex(myVIndex, FACEY, maxindex);
+  buildCollisionIndex(myWIndex, FACEZ, maxindex);
   myNumVelocityVars += maxindex;
-  if ( !reduced_stress_tensor() )
-    myNumStressVars += myNumPressureVars; // for tzz
 }
 
 
@@ -2210,7 +2202,7 @@ sim_stokesSolver<T>::buildDensityMatrix(
   vit.setConstArray(myUIndex.field());
   for ( vit.rewind(); !vit.atEnd(); vit.advance() )
   {
-    if( vit.getValue() != SOLVED )
+    if ( !isInSystem(vit.getValue()) )
       continue;
 
     int i = vit.x(), j = vit.y(), k = vit.z();
@@ -2229,7 +2221,7 @@ sim_stokesSolver<T>::buildDensityMatrix(
   vit.setConstArray(myVIndex.field());
   for ( vit.rewind(); !vit.atEnd(); vit.advance() )
   {
-    if( vit.getValue() != SOLVED )
+    if( !isInSystem(vit.getValue()) )
       continue;
 
     int i = vit.x(), j = vit.y(), k = vit.z();
@@ -2248,7 +2240,7 @@ sim_stokesSolver<T>::buildDensityMatrix(
   vit.setConstArray(myWIndex.field());
   for ( vit.rewind(); !vit.atEnd(); vit.advance() )
   {
-    if( vit.getValue() != SOLVED )
+    if( !isInSystem(vit.getValue()) )
       continue;
 
     int i = vit.x(), j = vit.y(), k = vit.z();
@@ -2481,31 +2473,28 @@ sim_stokesSolver<T>::buildSolidVelocityVector(
   for ( vit.rewind(); !vit.atEnd(); vit.advance() )
   {
     int i = vit.x(), j = vit.y(), k = vit.z();
-    if (!isInSystem(u_blk_idx(i,j,k)))
+    auto idx = u_blk_idx(i,j,k);
+    if (!isCollision(idx))
       continue;
-    if ( myUIndex(i,j,k) != COLLISION )
-      continue;
-    uout[u_blk_idx(i,j,k)] = vit.getValue();
+    uout[idx] = vit.getValue();
   }
   vit.setConstArray(&v);
   for ( vit.rewind(); !vit.atEnd(); vit.advance() )
   {
     int i = vit.x(), j = vit.y(), k = vit.z();
-    if (!isInSystem(v_blk_idx(i,j,k)))
+    auto idx = v_blk_idx(i,j,k);
+    if (!isCollision(idx))
       continue;
-    if ( myVIndex(i,j,k) != COLLISION )
-      continue;
-    uout[v_blk_idx(i,j,k)] = vit.getValue();
+    uout[idx] = vit.getValue();
   }
   vit.setConstArray(&w);
   for ( vit.rewind(); !vit.atEnd(); vit.advance() )
   {
     int i = vit.x(), j = vit.y(), k = vit.z();
-    if (!isInSystem(w_blk_idx(i,j,k)))
+    auto idx = w_blk_idx(i,j,k);
+    if (!isCollision(idx))
       continue;
-    if ( myWIndex(i,j,k) != COLLISION )
-      continue;
-    uout[w_blk_idx(i,j,k)] = vit.getValue();
+    uout[idx] = vit.getValue();
   }
   return uout;
 }
@@ -2546,13 +2535,13 @@ sim_stokesSolver<T>::buildVelocityVector(
 #ifndef BLOCKWISE_STOKES
   assert(myScheme != STOKES);
 #endif
+  const UT_VoxelArrayF &u_col = *colvel[0]->field();
+  const UT_VoxelArrayF &v_col = *colvel[1]->field();
+  const UT_VoxelArrayF &w_col = *colvel[2]->field();
+
   const UT_VoxelArrayF &u = *vel.getField(0)->field();
   const UT_VoxelArrayF &v = *vel.getField(1)->field();
   const UT_VoxelArrayF &w = *vel.getField(2)->field();
-
-  const UT_VoxelArrayF &ucol = *colvel[0]->field();
-  const UT_VoxelArrayF &vcol = *colvel[1]->field();
-  const UT_VoxelArrayF &wcol = *colvel[2]->field();
 
   UT_VoxelArrayIteratorF vit;
   vit.setConstArray(&u);
@@ -2562,7 +2551,7 @@ sim_stokesSolver<T>::buildVelocityVector(
     auto idx = u_blk_idx(i,j,k);
     if (!isInSystem(idx))
       continue;
-    ustar[idx] = myUIndex(i,j,k) != COLLISION ? vit.getValue() : ucol(i,j,k);
+    ustar[idx] = isCollision(idx) ? u_col(i,j,k) : vit.getValue();
   }
   vit.setConstArray(&v);
   for ( vit.rewind(); !vit.atEnd(); vit.advance() )
@@ -2571,7 +2560,7 @@ sim_stokesSolver<T>::buildVelocityVector(
     auto idx = v_blk_idx(i,j,k);
     if (!isInSystem(idx))
       continue;
-    ustar[idx] = myVIndex(i,j,k) != COLLISION ? vit.getValue() : vcol(i,j,k);
+    ustar[idx] = isCollision(idx) ? v_col(i,j,k) : vit.getValue();
   }
   vit.setConstArray(&w);
   for ( vit.rewind(); !vit.atEnd(); vit.advance() )
@@ -2580,7 +2569,7 @@ sim_stokesSolver<T>::buildVelocityVector(
     auto idx = w_blk_idx(i,j,k);
     if (!isInSystem(idx))
       continue;
-    ustar[idx] = myWIndex(i,j,k) != COLLISION ? vit.getValue() : wcol(i,j,k);
+    ustar[idx] = isCollision(idx) ? w_col(i,j,k) : vit.getValue();
   }
   return ustar;
 }
@@ -2818,59 +2807,6 @@ void sim_stokesSolver<T>::buildSystemBlockwise(
 
   H.resize(myNumVelocityVars, myNumPressureVars+myNumStressVars);
   H.setFromTriplets(triplets.begin(), triplets.end());
-}
-
-template<typename T>
-void
-sim_stokesSolver<T>::pinDirichletPressure(
-    BlockMatrixType& A,
-    BlockVectorType& b,
-    T p,
-    int idx) const
-{
-  b( idx ) = p;
-
-  for ( typename BlockMatrixType::InnerIterator it(A,idx); it; ++it )
-  {
-    auto& mtx_val = it.valueRef();
-    if ( it.row() == it.col() )
-    {
-      mtx_val = 1.0;
-      continue;
-    }
-
-    if ( mtx_val == 0.0 )
-      continue;
-
-    // adjust the RHS to account for the actual boundary values
-    b( it.row() ) -= mtx_val * p;
-
-    // eliminate the remaining entries, symmetrically
-    mtx_val = 0.0;
-    A.coeffRef( it.col(), it.row() ) = 0.0;
-  }
-}
-
-template<typename T>
-void
-sim_stokesSolver<T>::applyDirichletBoundary(
-    BlockMatrixType& A,
-    BlockVectorType& b,
-    const BlockVectorType& p,
-    const UT_VoxelArrayF& c_vol_liquid) const // enforce only on boundary cells
-{
-  UT_VoxelArrayIteratorF vit;
-  vit.setConstArray(&c_vol_liquid);
-  for ( vit.rewind(); !vit.atEnd(); vit.advance() )
-  {
-    int i = vit.x(), j = vit.y(), k = vit.z();
-    if( c_vol_liquid(i,j,k) == 1.0 || c_vol_liquid(i,j,k) == 0.0 )
-      continue;
-
-    int idx = p_blk_idx(i,j,k);
-    if ( isInSystem(idx) )
-      pinDirichletPressure(A, b, p[idx], idx);
-  }
 }
 
 template<typename T>
@@ -3559,17 +3495,17 @@ sim_stokesSolver<T>::updateVelocitiesPartial(
     {
       int i = vit.x(), j = vit.y(), k = vit.z();
       int idx = myUIndex(i,j,k);
-      if (idx != COLLISION && idx != SOLVED)
+      if (!isInSystem(idx))
         continue;
 
       if (valid)
         valid->getField(axis)->fieldNC()->setValue(i,j,k,1);
 
-      if (idx == COLLISION)
+      if (isCollision(idx))
       {
         vit.setValue(u_solid.getValue(i,j,k));
       }
-      else if (idx == SOLVED)
+      else // if (isInSystem(idx))
       {
         dens_x.setIndex(vit);
         auto dens = dens_x.getValue();
@@ -3595,17 +3531,17 @@ sim_stokesSolver<T>::updateVelocitiesPartial(
     {
       int i = vit.x(), j = vit.y(), k = vit.z();
       int idx = myVIndex(i,j,k);
-      if (idx != COLLISION && idx != SOLVED)
+      if (!isInSystem(idx))
         continue;
 
       if (valid)
         valid->getField(axis)->fieldNC()->setValue(i,j,k,1);
 
-      if (idx == COLLISION)
+      if (isCollision(idx))
       {
         vit.setValue(u_solid.getValue(i,j,k));
       }
-      else if (idx == SOLVED)
+      else // if (isInSystem(idx))
       {
         //pressure
         dens_y.setIndex(vit);
@@ -3630,17 +3566,17 @@ sim_stokesSolver<T>::updateVelocitiesPartial(
     {
       int i = vit.x(), j = vit.y(), k = vit.z();
       int idx = myWIndex(i,j,k);
-      if (idx != COLLISION && idx != SOLVED)
+      if (!isInSystem(idx))
         continue;
 
       if (valid)
         valid->getField(axis)->fieldNC()->setValue(i,j,k,1);
 
-      if (idx == COLLISION)
+      if (isCollision(idx))
       {
         vit.setValue(u_solid.getValue(i,j,k));
       }
-      else if (idx == SOLVED)
+      else // if (isInSystem(idx))
       {
         //pressure      
         dens_z.setIndex(vit);
@@ -3689,11 +3625,11 @@ sim_stokesSolver<T>::updateVelocitiesBlockwise(
   {
     int i = vit.x(), j = vit.y(), k = vit.z();
     int idx = myUIndex(i,j,k);
-    if (idx != COLLISION && idx != SOLVED)
+    if (!isInSystem(idx))
       continue;
     if ( valid )
       valid->getField(0)->fieldNC()->setValue(i,j,k,1);
-    vit.setValue(idx == COLLISION ? u_solid.getValue(i,j,k) : unew[u_blk_idx(i,j,k)]);
+    vit.setValue(isCollision(idx) ? u_solid.getValue(i,j,k) : unew[u_blk_idx(i,j,k)]);
   }
 
   vit.setArray(&v);
@@ -3701,11 +3637,11 @@ sim_stokesSolver<T>::updateVelocitiesBlockwise(
   {
     int i = vit.x(), j = vit.y(), k = vit.z();
     int idx = myVIndex(i,j,k);
-    if (idx != COLLISION && idx != SOLVED)
+    if (!isInSystem(idx))
       continue;
     if ( valid )
       valid->getField(1)->fieldNC()->setValue(i,j,k,1);
-    vit.setValue(idx == COLLISION ? v_solid.getValue(i,j,k) : unew[v_blk_idx(i,j,k)]);
+    vit.setValue(isCollision(idx) ? v_solid.getValue(i,j,k) : unew[v_blk_idx(i,j,k)]);
   }
 
   vit.setArray(&w);
@@ -3713,10 +3649,10 @@ sim_stokesSolver<T>::updateVelocitiesBlockwise(
   {
     int i = vit.x(), j = vit.y(), k = vit.z();
     int idx = myWIndex(i,j,k);
-    if (idx != COLLISION && idx != SOLVED)
+    if (!isInSystem(idx))
       continue;
     if ( valid )
       valid->getField(2)->fieldNC()->setValue(i,j,k,1);
-    vit.setValue(idx == COLLISION ? w_solid.getValue(i,j,k) : unew[w_blk_idx(i,j,k)]);
+    vit.setValue(isCollision(idx) ? w_solid.getValue(i,j,k) : unew[w_blk_idx(i,j,k)]);
   }
 }
