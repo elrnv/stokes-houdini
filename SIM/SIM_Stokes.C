@@ -2716,18 +2716,6 @@ void sim_stokesSolver<T>::buildSystemBlockwise(
   buildVelocityWeightMatrix<false>(u_vol_fluid, v_vol_fluid, w_vol_fluid, WFu);
   buildPressureWeightMatrix(c_vol_fluid, WFp);
 
-  BlockMatrixType WSu(myNumVelocityVars, myNumVelocityVars);
-  WSu.setIdentity();
-  WSu -= WFu;
-
-  BlockMatrixType WSt(myNumStressVars, myNumStressVars);
-  WSt.setIdentity();
-  WSt -= WFt;
-
-  BlockMatrixType WSp(myNumPressureVars, myNumPressureVars);
-  WSp.setIdentity();
-  WSp -= WFp;
-
   BlockMatrixType App;// = dt*WLp*G.transpose()*Pinv*WLuinv*WFu*G*WLp;
   BlockMatrixType Att;// = (dx*dx*0.5)*Minv*WLt*WFt + dt*WLt*D*Pinv*WLuinv*WFu*D.transpose()*WLt;
   BlockMatrixType Bp, Bt, Ht, Hp, Atp;
@@ -2762,8 +2750,8 @@ void sim_stokesSolver<T>::buildSystemBlockwise(
 
   rhs.resize(elts);
   rhs.setZero();
-  rhs << Bp*uold + dx*WLp*(G.transpose()*WSu - WSp*G.transpose())*ubc + WLp*G.transpose()*WFu*ust,
-         Bt*uold + dx*WLt*(D*WSu - WSt*D)*ubc + WLt*D*WFu*ust;
+  rhs << Bp*uold - dx*WLp*(G.transpose()*WFu - WFp*G.transpose())*ubc + WLp*G.transpose()*WFu*ust,
+         Bt*uold - dx*WLt*(D*WFu - WFt*D)*ubc + WLt*D*WFu*ust;
 
   triplets.clear();
   matrix.resize(elts,elts);
