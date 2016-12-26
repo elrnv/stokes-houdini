@@ -2202,7 +2202,7 @@ sim_stokesSolver<T>::buildDensityMatrix(
   vit.setConstArray(myUIndex.field());
   for ( vit.rewind(); !vit.atEnd(); vit.advance() )
   {
-    if ( !isInSystem(vit.getValue()) )
+    if ( !isInSystem(vit.getValue()) || isCollision(vit.getValue()) )
       continue;
 
     int i = vit.x(), j = vit.y(), k = vit.z();
@@ -2221,7 +2221,7 @@ sim_stokesSolver<T>::buildDensityMatrix(
   vit.setConstArray(myVIndex.field());
   for ( vit.rewind(); !vit.atEnd(); vit.advance() )
   {
-    if( !isInSystem(vit.getValue()) )
+    if( !isInSystem(vit.getValue()) || isCollision(vit.getValue()) )
       continue;
 
     int i = vit.x(), j = vit.y(), k = vit.z();
@@ -2240,7 +2240,7 @@ sim_stokesSolver<T>::buildDensityMatrix(
   vit.setConstArray(myWIndex.field());
   for ( vit.rewind(); !vit.atEnd(); vit.advance() )
   {
-    if( !isInSystem(vit.getValue()) )
+    if( !isInSystem(vit.getValue()) || isCollision(vit.getValue()) )
       continue;
 
     int i = vit.x(), j = vit.y(), k = vit.z();
