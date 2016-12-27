@@ -5,7 +5,8 @@ Usage: hython path/to/script/houBatch.py /path/to/hipfile /hou/path/to/rop
 TODO: Add options for multiple ROPs, hperf.
 """
 import hou, sys
-from os.path import basename, splitext
+from os.path import basename, splitext, dirname, exists
+from os import makedirs
 
 usage = "usage: run.py <hip file> <node name relative to /obj/>"
 
@@ -23,6 +24,10 @@ if node is None:
   print "Couldn't locate the node to cook"
   print usage
   sys.exit(2)
+
+statspath = "stats"
+if not exists(statspath):
+  makedirs(statspath)
 
 nodepath = nodepath.replace("/","-")
 projname = splitext(basename(hipfile))[0] # project name
@@ -48,7 +53,7 @@ node.parm("executebackground").pressButton()
 
 profile.stop()
 
-hperfpath = "stats/" + profilename + ".hperf"
+hperfpath = statspath + "/" + profilename + ".hperf"
 
 print("Saving hperf to " + hperfpath)
 profile.save(hperfpath)
