@@ -3,7 +3,7 @@ MAKE_PID := $(shell echo $$PPID)
 JOB_FLAG := $(filter -j%, $(subst -j ,-j,$(shell ps T | grep "^\s*$(MAKE_PID).*$(MAKE)")))
 JOBS     := $(subst -j,,$(JOB_FLAG))
 ifeq ($(JOBS),)
-	JOBS = $(shell nproc --all) # default number of jobs, I assume we have at least 4 cores
+	JOBS = $(shell nproc --all) # get the number of cpus for default number of jobs
 endif
 
 HXX=hython -j $(JOBS) run.py 
