@@ -18,7 +18,7 @@ usage:
 	@echo "   coil_vp"
 	@echo "   coil_stokes"
 	@echo "   conveyor_belt"
-	@echo "   viscous_coil"
+	@echo "   viscous_coil_houdini"
 	@echo "   viscous_coil_stokes"
 	@echo "   viscous_coils"
 	@echo "   dam_break_houdini"
