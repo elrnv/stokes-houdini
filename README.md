@@ -57,6 +57,4 @@ other Schemes will use a more expensive CPU based solver.
 
 ## TODO
 
-- The pure Viscosity solve is currently broken. Need to fix that (low priority)
-- Add surface tension
 - Add more examples

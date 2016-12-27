@@ -17,8 +17,8 @@
 #include <iostream>
 #include "../util/eigen.h"
 
-#define BLOCKWISE_STOKES
-#define USE_EIGEN_SOLVER_FOR_BLOCKWISE_STOKES
+//#define BLOCKWISE_STOKES
+//#define USE_EIGEN_SOLVER_FOR_BLOCKWISE_STOKES
 
 using std::tuple;
 using std::make_tuple;
@@ -1004,15 +1004,13 @@ sim_stokesSolver<T>::solve(
   }
   else if ( myScheme == VISCOSITY_ONLY )
   {
-    BlockVectorType bbig;
     BlockMatrixType Aubig, Bubig;
     BlockVectorType xbig = buildVelocityVector(vel, colvel);
     {
       UT_PerfMonAutoSolveEvent event(&mySolver, "Build Viscosity System");
       buildViscositySystem(Aubig, Bubig, sweights, cweights, viscosity, density, colvel);
-      Aubig.makeCompressed();
     }
-    bbig = Bubig*xbig;
+    BlockVectorType bbig = Bubig*xbig;
     BlockMatrixType Au;
     BlockVectorType b, x;
     std::vector<int> to_original;
