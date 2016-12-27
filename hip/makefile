@@ -3,12 +3,13 @@ MAKE_PID := $(shell echo $$PPID)
 JOB_FLAG := $(filter -j%, $(subst -j ,-j,$(shell ps T | grep "^\s*$(MAKE_PID).*$(MAKE)")))
 JOBS     := $(subst -j,,$(JOB_FLAG))
 ifeq ($(JOBS),)
-	JOBS = 8 # default number of jobs, I assume we have at least 4 cores
+	JOBS = $(shell nproc --all) # default number of jobs, I assume we have at least 4 cores
 endif
 
 HXX=hython -j $(JOBS) run.py 
 
 usage:
+	@echo "Available jobs: " $(JOBS)
 	@echo "Please chose one of the following targets:"
 	@echo "   collision_houdini"
 	@echo "   collision_stokes"
