@@ -534,10 +534,6 @@ public:
 #endif
     return myNumVelocityVars;
   }
-  int getNumCollisionVelocityVars() const 
-  {
-    myNumVelocityVars - myCollisionIndex;
-  }
 
 private: // data members
   int     ni, nj, nk;
