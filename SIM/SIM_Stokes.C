@@ -242,6 +242,7 @@ public:
 
     const UT_VoxelArrayF &viscosity;
     const UT_VoxelArrayF &density;
+    const UT_VoxelArrayF &surfpres;
 
     fpreal minrho;
     fpreal maxrho;
@@ -258,6 +259,7 @@ public:
         const SIM_RawField & viscosity,
         const SIM_RawField & density,
         const SIM_RawField * const* solid_vel,
+        const SIM_RawField & surfpres,
         SIM_VectorField * valid,
         SIM_VectorField & vel) const;
   SolverResult solveSystemEigen(
@@ -265,21 +267,64 @@ public:
       const BlockVectorType &b,
       BlockVectorType &x ) const;
 
-  THREADED_METHOD7_CONST(sim_stokesSolver, vel.getField(axis)->shouldMultiThread(),
+  struct sim_updateVelocityParms 
+  {
+    sim_updateVelocityParms(
+        const SIM_RawField * const* sweights,
+        const SIM_RawField * const* solid_vel,
+        const SIM_RawField & densfield,
+        const SIM_RawField & surfpres,
+        fpreal min_density,
+        fpreal max_density)
+      : c_vol_liquid( *sweights[0]->field())
+      , ez_vol_liquid(*sweights[1]->field())
+      , ey_vol_liquid(*sweights[2]->field())
+      , ex_vol_liquid(*sweights[3]->field())
+      , u_vol_liquid( *sweights[4]->field())
+      , v_vol_liquid( *sweights[5]->field())
+      , w_vol_liquid( *sweights[6]->field())
+
+      , u_solid(*solid_vel[0]->field())
+      , v_solid(*solid_vel[1]->field())
+      , w_solid(*solid_vel[2]->field())
+
+      , density(*densfield.field())
+      , surfpres(*surfpres.field())
+
+      , minrho(min_density)
+      , maxrho(max_density)
+      {}
+
+    const UT_VoxelArrayF &c_vol_liquid;
+    const UT_VoxelArrayF &ez_vol_liquid;
+    const UT_VoxelArrayF &ey_vol_liquid;
+    const UT_VoxelArrayF &ex_vol_liquid;
+    const UT_VoxelArrayF &u_vol_liquid;
+    const UT_VoxelArrayF &v_vol_liquid;
+    const UT_VoxelArrayF &w_vol_liquid;
+
+    const UT_VoxelArrayF &u_solid;
+    const UT_VoxelArrayF &v_solid;
+    const UT_VoxelArrayF &w_solid;
+
+    const UT_VoxelArrayF &density;
+    const UT_VoxelArrayF &surfpres;
+
+    fpreal minrho;
+    fpreal maxrho;
+  };
+
+  THREADED_METHOD5_CONST(sim_stokesSolver, vel.getField(axis)->shouldMultiThread(),
                          updateVelocities,
                          const VectorType &, x,
-                         const SIM_RawField * const*, surf_weights,
-                         const SIM_RawField * const*, solid_vel,
-                         const SIM_RawField &, density,
-                         SIM_VectorField *, valid,
+                         const sim_updateVelocityParms &, parms,
+                         SIM_VectorField *, valid, // output is explicit
                          SIM_VectorField &, vel,
                          int, axis)
 
   void updateVelocitiesPartial(
                          const VectorType &x,
-                         const SIM_RawField * const* surf_weights,
-                         const SIM_RawField * const* solid_vel,
-                         const SIM_RawField &density,
+                         const sim_updateVelocityParms &parms,
                          SIM_VectorField *valid,
                          SIM_VectorField &vel,
                          int axis,
@@ -290,6 +335,13 @@ public:
       const SIM_RawField * const* solid_vel,
       SIM_VectorField *valid,
       SIM_VectorField &vel) const;
+
+  // interpolate ghost fluid pressure at the liquid surface inside the given
+  // velocity voxel
+  template<int AXIS>
+  auto ghostFluidSurfaceTensionPressure(
+        int i, int j, int k, float weight,
+        const UT_VoxelArrayF & sp) const -> T;
 
   auto buildVelocityVector(
       const SIM_VectorField &vel,
@@ -995,7 +1047,7 @@ sim_stokesSolver<T>::solve(
 #ifdef BLOCKWISE_STOKES
     result = solveBlockwiseStokes(surf, sweights, cweights, viscosity, density, colvel, surfpres, valid, vel);
 #else
-    result = solveStokes(sweights, cweights, viscosity, density, colvel, valid, vel);
+    result = solveStokes(sweights, cweights, viscosity, density, colvel, surfpres, valid, vel);
 #endif
   }
   else if ( myScheme == VISCOSITY_ONLY )
@@ -1102,14 +1154,18 @@ sim_stokesSolver<T>::addUTerm(int row_index, int i, int j, int k, float sign, fl
                               UT_Array<RowEntry>& rowentries,
                               VectorType& b) const
 {
+  auto solid_vel = parms.u_solid.getValue(i,j,k);
+  auto vel_fw = parms.u_vol_fluid(i,j,k); // x-face fluid volume weight
+  auto vel_lw = parms.u_vol_liquid(i,j,k); // x-face liquid volume weight
+
   int idx = myUIndex(i,j,k);
   if (isCollision(idx))
-    b(row_index) -= sign * outer_liquid * parms.u_vol_fluid(i,j,k) * parms.u_solid.getValue(i,j,k) * dx;
+    b(row_index) -= sign * outer_liquid * vel_fw * solid_vel * dx;
   else if (isInSystem(idx))
   {
     rhox.setIndex(i,j,k);
     auto rho = SYSclamp(rhox.getValue(), parms.minrho, parms.maxrho);
-    double factor = sign * dt * outer_liquid * parms.u_vol_fluid(i,j,k) / (rho * parms.u_vol_liquid(i,j,k));
+    double factor = sign * dt * outer_liquid * vel_fw / (rho * vel_lw);
 
     //-dp/dx
     if(p_idx(i,   j,   k) >= 0)      rowentries.emplace_back(  p_idx(i,   j,   k),   -factor * parms.c_vol_liquid(i,   j,   k));
@@ -1128,11 +1184,14 @@ sim_stokesSolver<T>::addUTerm(int row_index, int i, int j, int k, float sign, fl
     if(txz_idx(i,   j,   k) >= 0)    rowentries.emplace_back(txz_idx(i,   j,   k),   -factor * parms.ey_vol_liquid(i,   j,   k));
 
     //u*
-    b(row_index) -= sign * outer_liquid * parms.u_vol_fluid(i,j,k) * parms.u(i,j,k) * dx;
+    b(row_index) -= sign * outer_liquid * vel_fw * parms.u(i,j,k) * dx;
+
+    auto gfp = ghostFluidSurfaceTensionPressure<0>(i,j,k, vel_lw, parms.surfpres);
+    b(row_index) += factor * gfp;
   }
 
-  b(row_index) -= sign * outer_liquid * (1.0-parms.u_vol_fluid(i,j,k)) * parms.u_solid.getValue(i,j,k) * dx;
-  b(row_index) -= sign * outer_liquid * (1.0-outer_fluid) * parms.u_solid.getValue(i,j,k) * dx;
+  b(row_index) += sign * outer_liquid * vel_fw      * solid_vel * dx;
+  b(row_index) -= sign * outer_liquid * outer_fluid * solid_vel * dx;
 }
 
 template<typename T>
@@ -1143,14 +1202,18 @@ sim_stokesSolver<T>::addVTerm(int row_index, int i, int j, int k, float sign, fl
                               UT_Array<RowEntry>& rowentries,
                               VectorType& b) const
 {
+  auto solid_vel = parms.v_solid.getValue(i,j,k);
+  auto vel_fw = parms.v_vol_fluid(i,j,k); // y-face fluid volume weight
+  auto vel_lw = parms.v_vol_liquid(i,j,k); // y-face liquid volume weight
+
   int idx = myVIndex(i,j,k);
   if (isCollision(idx))
-    b(row_index) -=  sign * outer_liquid * parms.v_vol_fluid(i,j,k) * parms.v_solid.getValue(i,j,k) * dx;
+    b(row_index) -=  sign * outer_liquid * vel_fw * solid_vel * dx;
   else if (isInSystem(idx))
   {
     rhoy.setIndex(i,j,k);
     auto rho = SYSclamp(rhoy.getValue(), parms.minrho, parms.maxrho);
-    double factor = sign * dt * outer_liquid * parms.v_vol_fluid(i,j,k) / (rho * parms.v_vol_liquid(i,j,k));
+    double factor = sign * dt * outer_liquid * vel_fw / (rho * vel_lw);
 
     //-dp/dy
     if(p_idx(i,   j,   k) >= 0)     rowentries.emplace_back(  p_idx(i,   j,   k),   -factor * parms.c_vol_liquid(i,   j,   k));
@@ -1168,11 +1231,14 @@ sim_stokesSolver<T>::addVTerm(int row_index, int i, int j, int k, float sign, fl
     if(tyz_idx(i,   j,   k+1) >= 0) rowentries.emplace_back(tyz_idx(i,   j,   k+1), +factor * parms.ex_vol_liquid(i,   j,   k+1));
     if(tyz_idx(i,   j,   k) >= 0)   rowentries.emplace_back(tyz_idx(i,   j,   k),   -factor * parms.ex_vol_liquid(i,   j,   k));
 
-    b(row_index) -= sign * outer_liquid * parms.v_vol_fluid(i,j,k) * parms.v(i,j,k) * dx;
+    b(row_index) -= sign * outer_liquid * vel_fw * parms.v(i,j,k) * dx;
+
+    auto gfp = ghostFluidSurfaceTensionPressure<1>(i,j,k, vel_lw, parms.surfpres);
+    b(row_index) += factor * gfp;
   }
 
-  b(row_index) -= sign * outer_liquid * (1.0-parms.v_vol_fluid(i,j,k)) * parms.v_solid.getValue(i,j,k) * dx;
-  b(row_index) -= sign * outer_liquid * (1.0-outer_fluid) * parms.v_solid.getValue(i,j,k) * dx;
+  b(row_index) += sign * outer_liquid * vel_fw      * solid_vel * dx;
+  b(row_index) -= sign * outer_liquid * outer_fluid * solid_vel * dx;
 }
 
 template<typename T>
@@ -1183,14 +1249,18 @@ sim_stokesSolver<T>::addWTerm(int row_index, int i, int j, int k, float sign, fl
                               UT_Array<RowEntry>& rowentries,
                               VectorType& b) const
 {
+  auto solid_vel = parms.w_solid.getValue(i,j,k);
+  auto vel_fw = parms.w_vol_fluid(i,j,k); // y-face fluid volume weight
+  auto vel_lw = parms.w_vol_liquid(i,j,k); // y-face liquid volume weight
+
   int idx = myWIndex(i,j,k);
   if (isCollision(idx))
-    b(row_index) -= sign * outer_liquid * parms.w_vol_fluid(i,j,k) * parms.w_solid.getValue(i,j,k) * dx;
+    b(row_index) -= sign * outer_liquid * vel_fw * solid_vel * dx;
   else if (isInSystem(idx))
   {
     rhoz.setIndex(i,j,k);
     auto rho = SYSclamp(rhoz.getValue(), parms.minrho, parms.maxrho);
-    double factor = sign * dt * outer_liquid * parms.w_vol_fluid(i,j,k) / (rho * parms.w_vol_liquid(i,j,k));
+    double factor = sign * dt * outer_liquid * vel_fw / (rho * vel_lw);
 
     //-dpdz
     if(p_idx(i,   j,   k) >= 0)     rowentries.emplace_back(  p_idx(i,   j,   k),   -factor * parms.c_vol_liquid(i,   j,   k));
@@ -1211,11 +1281,14 @@ sim_stokesSolver<T>::addWTerm(int row_index, int i, int j, int k, float sign, fl
     if(tyy_idx(i,   j,   k) >= 0)   rowentries.emplace_back(tyy_idx(i,   j,   k),   -factor * parms.c_vol_liquid(i,   j,   k));
     if(tyy_idx(i,   j,   k-1) >= 0) rowentries.emplace_back(tyy_idx(i,   j,   k-1), +factor * parms.c_vol_liquid(i,   j,   k-1));
 
-    b(row_index) -= sign * outer_liquid * parms.w_vol_fluid(i,j,k) * parms.w(i,j,k) * dx;
+    b(row_index) -= sign * outer_liquid * vel_fw * parms.w(i,j,k) * dx;
+
+    auto gfp = ghostFluidSurfaceTensionPressure<2>(i,j,k, vel_lw, parms.surfpres);
+    b(row_index) += factor * gfp;
   }
 
-  b(row_index) -= sign * outer_liquid * (1.0-parms.w_vol_fluid(i,j,k)) * parms.w_solid.getValue(i,j,k) * dx;
-  b(row_index) -= sign * outer_liquid * (1.0-outer_fluid) * parms.w_solid.getValue(i,j,k) * dx;
+  b(row_index) += sign * outer_liquid * vel_fw      * solid_vel * dx;
+  b(row_index) -= sign * outer_liquid * outer_fluid * solid_vel * dx;
 }
 
 // we need this function to add entries with the same column index
@@ -1259,6 +1332,9 @@ sim_stokesSolver<T>::addCenterTermsPartial(
 
   auto min_visc = mySolver.getMinViscosity();
 
+  //rhs << Bp*uold - dx*WLp*(G.transpose()*WFu - WFp*G.transpose())*ubc + WLp*G.transpose()*WFu*ust,
+  //       Bt*uold - dx*WLt*(D*WFu - WFt*D)*ubc + WLt*D*WFu*ust;
+  //
   UT_Array<RowEntry> rowentries;
   UT_VoxelArrayIteratorI vit;
   UT_VoxelTileIteratorI vitt;
@@ -2382,6 +2458,52 @@ sim_stokesSolver<T>::buildStressWeightMatrix(
   W.setFromTriplets(triplets.begin(), triplets.end());
 }
 
+// POST: if there the velocity sample lies at the boundary, return the
+// appropriate ghost fluid pressure at the air-liquid interface, which lies
+// within the given velocity voxel
+template<typename T>
+template<int AXIS>
+auto
+sim_stokesSolver<T>::ghostFluidSurfaceTensionPressure(
+    int i, int j, int k, float weight,
+    const UT_VoxelArrayF & sp) const -> T
+{
+  if ( !weight ) return 0;
+  exint uidx = -1;
+  exint pidx0 = -1;
+  exint pidx1 = myCentralIndex(i,j,k);
+  auto p1 = sp.getValue(i,j,k);
+  float p0 = 0;
+  switch (AXIS)
+  {
+    case 0:
+      uidx = myUIndex(i,j,k);
+      pidx0 = myCentralIndex(i-1,j,k);
+      p0 = sp.getValue(i-1,j,k);
+      break;
+    case 1:
+      uidx = myVIndex(i,j,k);
+      pidx0 = myCentralIndex(i,j-1,k);
+      p0 = sp.getValue(i,j-1,k);
+      break;
+    case 2:
+      uidx = myWIndex(i,j,k);
+      pidx0 = myCentralIndex(i,j,k-1);
+      p0 = sp.getValue(i,j,k-1);
+      break;
+  }
+
+  if (!isInSystem(uidx))
+    return 0;
+
+  if ( pidx0 == AIR && isInSystem(pidx1) )
+    return -SYSlerp(p1, p0, weight);
+  else if ( pidx1 == AIR && isInSystem(pidx0) )
+    return SYSlerp(p0, p1, weight);
+
+  return 0;
+}
+
 // PRE:  input is the surface tension pressure field
 // POST: output is the vector aligned with velocity values at cell interfaces
 // containing the ghost pressures where one neighbour is inside and one outside
@@ -2408,12 +2530,7 @@ sim_stokesSolver<T>::buildGhostFluidSurfaceTensionPressureVector(
     auto uidx = u_blk_idx(i,j,k);
     if (!isInSystem(uidx) || vit.getValue() == 0.0f)
       continue;
-    auto pidx0 = p_blk_idx(i-1,j,k);
-    auto pidx1 = p_blk_idx(i,j,k);
-    if ( pidx0 == AIR && isInSystem(pidx1) )
-      ust[uidx] = -SYSlerp(sp(i,j,k), sp.getValue(i-1,j,k), vit.getValue());
-    else if ( pidx1 == AIR && isInSystem(pidx0) )
-      ust[uidx] = SYSlerp(sp.getValue(i-1,j,k), sp(i,j,k), vit.getValue());
+    ust[uidx] = ghostFluidSurfaceTensionPressure<0>(i,j,k, vit.getValue(), sp);
   }
   vit.setConstArray(&v_weights);
   for ( vit.rewind(); !vit.atEnd(); vit.advance() )
@@ -2422,12 +2539,7 @@ sim_stokesSolver<T>::buildGhostFluidSurfaceTensionPressureVector(
     auto vidx = v_blk_idx(i,j,k);
     if (!isInSystem(vidx) || vit.getValue() == 0.0f)
       continue;
-    auto pidx0 = p_blk_idx(i,j-1,k);
-    auto pidx1 = p_blk_idx(i,j,k);
-    if ( pidx0 == AIR && isInSystem(pidx1) )
-      ust[vidx] = -SYSlerp(sp(i,j,k), sp.getValue(i,j-1,k), vit.getValue());
-    else if ( pidx1 == AIR && isInSystem(pidx0) )
-      ust[vidx] = SYSlerp(sp.getValue(i,j-1,k), sp(i,j,k), vit.getValue());
+    ust[vidx] = ghostFluidSurfaceTensionPressure<1>(i,j,k, vit.getValue(), sp);
   }
   vit.setConstArray(&w_weights);
   for ( vit.rewind(); !vit.atEnd(); vit.advance() )
@@ -2436,12 +2548,7 @@ sim_stokesSolver<T>::buildGhostFluidSurfaceTensionPressureVector(
     auto widx = w_blk_idx(i,j,k);
     if (!isInSystem(widx) || vit.getValue() == 0.0f)
       continue;
-    auto pidx0 = p_blk_idx(i,j,k-1);
-    auto pidx1 = p_blk_idx(i,j,k);
-    if ( pidx0 == AIR && isInSystem(pidx1) )
-      ust[widx] = -SYSlerp(sp(i,j,k), sp.getValue(i,j,k-1), vit.getValue());
-    else if ( pidx1 == AIR && isInSystem(pidx0) )
-      ust[widx] = SYSlerp(sp.getValue(i,j,k-1), sp(i,j,k), vit.getValue());
+    ust[widx] = ghostFluidSurfaceTensionPressure<2>(i,j,k, vit.getValue(), sp);
   }
 
   return ust;
@@ -2713,8 +2820,10 @@ void sim_stokesSolver<T>::buildSystemBlockwise(
   BlockMatrixType App;// = dt*WLp*G.transpose()*Pinv*WLuinv*WFu*G*WLp;
   BlockMatrixType Att;// = (dx*dx*0.5)*Minv*WLt*WFt + dt*WLt*D*Pinv*WLuinv*WFu*D.transpose()*WLt;
   BlockMatrixType Bp, Bt, Ht, Hp, Atp;
+
   assembleBlockSystem(WLp, WLuinv, WFu, WLt, WFt, G, D, Pinv, Minv, App, Bp, Hp, Att, Bt, Ht);
   Atp = dt*WLt*D*Pinv*WLuinv*WFu*G*WLp;
+
   assert(isMatrixValid(App));
   assert(isMatrixValid(Att));
 
@@ -3201,11 +3310,14 @@ sim_stokesSolver<T>::solveBlockwiseStokes(
   {
     UT_PerfMonAutoSolveEvent event(&mySolver, "Update Velocity");
 
+    sim_updateVelocityParms parms(sweights, solid_vel, densfield, surf_pres,
+          mySolver.getMinDensity(), mySolver.getMaxDensity());
+
     for ( int axis = 0; axis < 3; ++axis )
     {
       if ( valid )
         valid->getField(axis)->makeConstant(0);
-      updateVelocities(x, sweights, solid_vel, densfield, valid, vel, axis);
+      updateVelocities(x, parms, valid, vel, axis);
     }
   }
 #endif
@@ -3236,6 +3348,7 @@ sim_stokesSolver<T>::solveStokes(
     const SIM_RawField & viscfield,
     const SIM_RawField & densfield,
     const SIM_RawField * const* solid_vel,
+    const SIM_RawField & surfpres,
     SIM_VectorField * valid,
     SIM_VectorField & vel) const
 {
@@ -3266,6 +3379,7 @@ sim_stokesSolver<T>::solveStokes(
 
     *viscfield.field(),
     *densfield.field(),
+    *surfpres.field(),
 
     mySolver.getMinDensity(),
     mySolver.getMaxDensity()
@@ -3293,11 +3407,13 @@ sim_stokesSolver<T>::solveStokes(
   if (result == SUCCESS)
   {
     UT_PerfMonAutoSolveEvent event(&mySolver, "Update Velocity");
+    sim_updateVelocityParms parms(sweights, solid_vel, densfield, surfpres,
+          mySolver.getMinDensity(), mySolver.getMaxDensity());
     for ( int axis = 0; axis < 3; ++axis )
     {
       if ( valid )
         valid->getField(axis)->makeConstant(0);
-      updateVelocities(x, sweights, solid_vel, densfield, valid, vel, axis);
+      updateVelocities(x, parms, valid, vel, axis);
     }
   }
   return result;
@@ -3426,50 +3542,29 @@ template<typename T>
 void
 sim_stokesSolver<T>::updateVelocitiesPartial(
     const VectorType &x,
-    const SIM_RawField * const* surf_weights,
-    const SIM_RawField * const* solid_vel,
-    const SIM_RawField &densfield,
+    const sim_updateVelocityParms & parms,
     SIM_VectorField * valid,
     SIM_VectorField &vel,
     int axis,
     const UT_JobInfo &info) const
 {
   // Update velocities based on the pressures and stresses determined by the solver.
-
-  const UT_VoxelArrayF &c_vol_liquid = *surf_weights[0]->field();
-  const UT_VoxelArrayF &ez_vol_liquid = *surf_weights[1]->field();
-  const UT_VoxelArrayF &ey_vol_liquid = *surf_weights[2]->field();
-  const UT_VoxelArrayF &ex_vol_liquid = *surf_weights[3]->field();
-  const UT_VoxelArrayF &u_vol_liquid = *surf_weights[4+axis]->field();
-
-  const UT_VoxelArrayF &u_solid = *solid_vel[axis]->field();
-
-  const UT_VoxelArrayF &density = *densfield.field();
   UT_VoxelArrayF &u = *vel.getField(axis)->fieldNC();
 
   // edge-centred quantities
-  auto txy = [&](int i, int j, int k) { return txy_idx(i,j,k) < 0 ? 0 : x(txy_idx(i,j,k)); };
-  auto txz = [&](int i, int j, int k) { return txz_idx(i,j,k) < 0 ? 0 : x(txz_idx(i,j,k)); };
-  auto tyz = [&](int i, int j, int k) { return tyz_idx(i,j,k) < 0 ? 0 : x(tyz_idx(i,j,k)); };
+  auto txy = [&](int i, int j, int k) { return !isInSystem(txy_idx(i,j,k)) ? 0 : x(txy_idx(i,j,k)); };
+  auto txz = [&](int i, int j, int k) { return !isInSystem(txz_idx(i,j,k)) ? 0 : x(txz_idx(i,j,k)); };
+  auto tyz = [&](int i, int j, int k) { return !isInSystem(tyz_idx(i,j,k)) ? 0 : x(tyz_idx(i,j,k)); };
 
   // cell centered quantities
-  auto txx = [&](int i, int j, int k) { return txx_idx(i,j,k) < 0 ? 0 : x(txx_idx(i,j,k)); };
-  auto tyy = [&](int i, int j, int k) { return tyy_idx(i,j,k) < 0 ? 0 : x(tyy_idx(i,j,k)); };
-  auto p   = [&](int i, int j, int k) { return p_idx(i,j,k)   < 0 ? 0 : x(p_idx(i,j,k)); };
-
-  //auto txy = [&](int i, int j, int k) { assert(txy_idx(i,j,k) >= 0); return x[txy_idx(i,j,k)]; };
-  //auto txz = [&](int i, int j, int k) { assert(txz_idx(i,j,k) >= 0); return x[txz_idx(i,j,k)]; };
-  //auto tyz = [&](int i, int j, int k) { assert(tyz_idx(i,j,k) >= 0); return x[tyz_idx(i,j,k)]; };
-
-  //// cell centered quantities
-  //auto txx = [&](int i, int j, int k) { assert(txx_idx(i,j,k) >= 0); return x[txx_idx(i,j,k)]; };
-  //auto tyy = [&](int i, int j, int k) { assert(tyy_idx(i,j,k) >= 0); return x[tyy_idx(i,j,k)]; };
-  //auto p   = [&](int i, int j, int k) { assert(p_idx(i,j,k)   >= 0); return x[p_idx(i,j,k)]; };
+  auto txx = [&](int i, int j, int k) { return !isInSystem(txx_idx(i,j,k)) ? 0 : x(txx_idx(i,j,k)); };
+  auto tyy = [&](int i, int j, int k) { return !isInSystem(tyy_idx(i,j,k)) ? 0 : x(tyy_idx(i,j,k)); };
+  auto p   = [&](int i, int j, int k) { return !isInSystem(p_idx(i,j,k)  ) ? 0 : x(p_idx(i,j,k)); };
 
   if ( axis == 0 )
   {
-    UT_VoxelProbeAverage<float,-1,0,0> dens_x;
-    dens_x.setArray(&density);
+    UT_VoxelProbeAverage<float,-1,0,0> rhox;
+    rhox.setArray(&parms.density);
     UT_VoxelArrayIteratorF vit(&u);
     vit.splitByTile(info);
 
@@ -3485,27 +3580,31 @@ sim_stokesSolver<T>::updateVelocitiesPartial(
 
       if (isCollision(idx))
       {
-        vit.setValue(u_solid.getValue(i,j,k));
+        vit.setValue(parms.u_solid.getValue(i,j,k));
       }
       else // if (isInSystem(idx))
       {
-        dens_x.setIndex(vit);
-        auto dens = dens_x.getValue();
-        auto factor = dt / (dx * dens * u_vol_liquid(i,j,k));
+        auto gfp = ghostFluidSurfaceTensionPressure<0>(i,j,k, parms.u_vol_liquid(i,j,k), parms.surfpres);
+        rhox.setIndex(vit);
+        auto rho = SYSclamp(rhox.getValue(), parms.minrho, parms.maxrho);
+        auto factor = dt / (dx * rho * parms.u_vol_liquid(i,j,k));
         // pressure
-        vit.setValue(u(i,j,k) + factor * (c_vol_liquid.getValue(i-1,j,k)*p(i-1,j,k) - c_vol_liquid.getValue(i,j,k)*p(i,j,k)
+        vit.setValue(u(i,j,k) + factor * (parms.c_vol_liquid.getValue(i-1,j,k)*p(i-1,j,k) - parms.c_vol_liquid.getValue(i,j,k)*p(i,j,k)
               // stress
-              + ((c_vol_liquid.getValue(i,j,k)    *txx(i,j,k)   - c_vol_liquid.getValue(i-1,j,k) *txx(i-1,j,k))
-              +  (ez_vol_liquid.getValue(i,j+1,k) *txy(i,j+1,k) - ez_vol_liquid.getValue(i,j,k)  *txy(i,j,k))
-              +  (ey_vol_liquid.getValue(i,j,k+1) *txz(i,j,k+1) - ey_vol_liquid.getValue(i,j,k)  *txz(i,j,k)))) );
+              + ((parms.c_vol_liquid.getValue(i,j,k)    *txx(i,j,k)   - parms.c_vol_liquid.getValue(i-1,j,k) *txx(i-1,j,k))
+              +  (parms.ez_vol_liquid.getValue(i,j+1,k) *txy(i,j+1,k) - parms.ez_vol_liquid.getValue(i,j,k)  *txy(i,j,k))
+              +  (parms.ey_vol_liquid.getValue(i,j,k+1) *txz(i,j,k+1) - parms.ey_vol_liquid.getValue(i,j,k)  *txz(i,j,k))))
+            - factor * gfp
+            );
+        
       }
 
     }
   }
   else if ( axis == 1 )
   {
-    UT_VoxelProbeAverage<float,0,-1,0> dens_y;
-    dens_y.setArray(&density);
+    UT_VoxelProbeAverage<float,0,-1,0> rhoy;
+    rhoy.setArray(&parms.density);
     UT_VoxelArrayIteratorF vit(&u);
     vit.splitByTile(info);
 
@@ -3521,26 +3620,29 @@ sim_stokesSolver<T>::updateVelocitiesPartial(
 
       if (isCollision(idx))
       {
-        vit.setValue(u_solid.getValue(i,j,k));
+        vit.setValue(parms.v_solid.getValue(i,j,k));
       }
       else // if (isInSystem(idx))
       {
+        auto gfp = ghostFluidSurfaceTensionPressure<1>(i,j,k, parms.v_vol_liquid(i,j,k), parms.surfpres);
+        rhoy.setIndex(vit);
+        auto rho = SYSclamp(rhoy.getValue(), parms.minrho, parms.maxrho);
+        auto factor = dt / (dx * rho * parms.v_vol_liquid(i,j,k));
         //pressure
-        dens_y.setIndex(vit);
-        auto dens = dens_y.getValue();
-        auto factor = dt / (dx * dens * u_vol_liquid(i,j,k));
-        vit.setValue(u(i,j,k) + factor * (c_vol_liquid.getValue(i,j-1,k)*p(i,j-1,k) - c_vol_liquid.getValue(i,j,k)*p(i,j,k)
+        vit.setValue(u(i,j,k) + factor * (parms.c_vol_liquid.getValue(i,j-1,k)*p(i,j-1,k) - parms.c_vol_liquid.getValue(i,j,k)*p(i,j,k)
               //stress
-              + ((ez_vol_liquid.getValue(i+1,j,k) *txy(i+1,j,k) - ez_vol_liquid.getValue(i,j,k)  *txy(i,j,k))
-              +  (c_vol_liquid.getValue(i,j,k)    *tyy(i,j,k)   - c_vol_liquid.getValue(i,j-1,k) *tyy(i,j-1,k))
-              +  (ex_vol_liquid.getValue(i,j,k+1) *tyz(i,j,k+1) - ex_vol_liquid.getValue(i,j,k)  *tyz(i,j,k)))) );
+              + ((parms.ez_vol_liquid.getValue(i+1,j,k) *txy(i+1,j,k) - parms.ez_vol_liquid.getValue(i,j,k)  *txy(i,j,k))
+              +  (parms.c_vol_liquid.getValue(i,j,k)    *tyy(i,j,k)   - parms.c_vol_liquid.getValue(i,j-1,k) *tyy(i,j-1,k))
+              +  (parms.ex_vol_liquid.getValue(i,j,k+1) *tyz(i,j,k+1) - parms.ex_vol_liquid.getValue(i,j,k)  *tyz(i,j,k))))
+            - factor * gfp
+            );
       }
     }
   }
   else if ( axis == 2 )
   {
-    UT_VoxelProbeAverage<float,0,0,-1> dens_z;
-    dens_z.setArray(&density);
+    UT_VoxelProbeAverage<float,0,0,-1> rhoz;
+    rhoz.setArray(&parms.density);
     UT_VoxelArrayIteratorF vit(&u);
     vit.splitByTile(info);
 
@@ -3556,20 +3658,23 @@ sim_stokesSolver<T>::updateVelocitiesPartial(
 
       if (isCollision(idx))
       {
-        vit.setValue(u_solid.getValue(i,j,k));
+        vit.setValue(parms.w_solid.getValue(i,j,k));
       }
       else // if (isInSystem(idx))
       {
+        auto gfp = ghostFluidSurfaceTensionPressure<2>(i,j,k, parms.w_vol_liquid(i,j,k), parms.surfpres);
+        rhoz.setIndex(vit);
+        auto rho = SYSclamp(rhoz.getValue(), parms.minrho, parms.maxrho);
+        auto factor =  dt / (dx * rho * parms.w_vol_liquid(i,j,k));
         //pressure      
-        dens_z.setIndex(vit);
-        auto dens = dens_z.getValue();
-        auto factor =  dt / (dx * dens * u_vol_liquid(i,j,k));
-        vit.setValue(u(i,j,k) + factor * (c_vol_liquid.getValue(i,j,k-1)*p(i,j,k-1) - c_vol_liquid.getValue(i,j,k)*p(i,j,k)
+        vit.setValue(u(i,j,k) + factor * (parms.c_vol_liquid.getValue(i,j,k-1)*p(i,j,k-1) - parms.c_vol_liquid.getValue(i,j,k)*p(i,j,k)
               //stress
-              + ((ey_vol_liquid.getValue(i+1,j,k)*txz(i+1,j,k) - ey_vol_liquid.getValue(i,j,k)  *txz(i,j,k))
-                +  (ex_vol_liquid.getValue(i,j+1,k)*tyz(i,j+1,k) - ex_vol_liquid.getValue(i,j,k)  *tyz(i,j,k))
-                -  (c_vol_liquid.getValue(i,j,k)   *txx(i,j,k)   - c_vol_liquid.getValue(i,j,k-1) *txx(i,j,k-1))
-                -  (c_vol_liquid.getValue(i,j,k)   *tyy(i,j,k)   - c_vol_liquid.getValue(i,j,k-1) *tyy(i,j,k-1)))) );
+              + ((parms.ey_vol_liquid.getValue(i+1,j,k)*txz(i+1,j,k) - parms.ey_vol_liquid.getValue(i,j,k)  *txz(i,j,k))
+              +  (parms.ex_vol_liquid.getValue(i,j+1,k)*tyz(i,j+1,k) - parms.ex_vol_liquid.getValue(i,j,k)  *tyz(i,j,k))
+              -  (parms.c_vol_liquid.getValue(i,j,k)   *txx(i,j,k)   - parms.c_vol_liquid.getValue(i,j,k-1) *txx(i,j,k-1))
+              -  (parms.c_vol_liquid.getValue(i,j,k)   *tyy(i,j,k)   - parms.c_vol_liquid.getValue(i,j,k-1) *tyy(i,j,k-1))))
+            - factor * gfp
+            );
       }
     }
   }
