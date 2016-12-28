@@ -46,6 +46,9 @@ coil_stokes:
 conveyor_belt:
 	$(HXX) conveyor_belt.hip dopnet1/output
 
+conveyor_belt_stokes:
+	$(HXX) conveyor_belt.hip stokes/stokes
+
 viscous_coil_houdini:
 	$(HXX) viscous_coil_houdini.hip fluid/viscous_fluid
 
