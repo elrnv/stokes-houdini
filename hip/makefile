@@ -2,8 +2,13 @@
 MAKE_PID := $(shell echo $$PPID)
 JOB_FLAG := $(filter -j%, $(subst -j ,-j,$(shell ps T | grep "^\s*$(MAKE_PID).*$(MAKE)")))
 JOBS     := $(subst -j,,$(JOB_FLAG))
+UNAME_S  := $(shell uname -s)
 ifeq ($(JOBS),)
-	JOBS = $(shell nproc --all) # get the number of cpus for default number of jobs
+	ifeq ($(UNAME_S),Linux)
+		JOBS = $(shell nproc --all) # get the number of cpus for default number of jobs
+	else ifeq ($(UNAME_S),Darwin)
+		JOBS = $(shell sysctl -n hw.ncpu) # get the number of cpus for default number of jobs
+	endif
 endif
 
 HXX=hython -j $(JOBS) run.py 
@@ -64,3 +69,7 @@ dam_break_stokes:
 	$(HXX) dam_break.hip stokes/stokes_fluid
 
 dam_break: dam_break_stokes dam_break_houdini
+
+buckling:
+	$(HXX) buckling.hip dopnet1/output
+
