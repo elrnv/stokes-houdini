@@ -24,12 +24,17 @@ usage:
 	@echo "   coil_vp"
 	@echo "   coil_stokes"
 	@echo "   conveyor_belt"
+	@echo "   conveyor_belt_stokes"
 	@echo "   viscous_coil_houdini"
 	@echo "   viscous_coil_stokes"
 	@echo "   viscous_coils"
 	@echo "   dam_break_houdini"
 	@echo "   dam_break_stokes"
 	@echo "   dam_break"
+	@echo "   buckling"
+	@echo "   surface_tension_stokes"
+	@echo "   surface_tension_decoupled"
+	@echo "   surface_tension"
 
 
 collision_houdini:
@@ -73,3 +78,32 @@ dam_break: dam_break_stokes dam_break_houdini
 buckling:
 	$(HXX) buckling.hip dopnet1/output
 
+surface_tension_stokes:
+	$(HXX) surface_tension.hip stokes_fluid/stokes
+
+surface_tension_decoupled:
+	$(HXX) surface_tension.hip decoupled_fluid/decoupled
+
+surface_tension_stokes_5:
+	$(HXX) surface_tension_5.hip stokes_fluid/stokes
+
+surface_tension_decoupled_5:
+	$(HXX) surface_tension_5.hip decoupled_fluid/decoupled
+
+surface_tension_stokes_10-20:
+	$(HXX) surface_tension_10-20.hip stokes_fluid/stokes
+
+surface_tension_decoupled_10-20:
+	$(HXX) surface_tension_10-20.hip decoupled_fluid/decoupled
+
+surface_tension_stokes_50-20:
+	$(HXX) surface_tension_50-20.hip stokes_fluid/stokes
+
+surface_tension_decoupled_50-20:
+	$(HXX) surface_tension_50-20.hip decoupled_fluid/decoupled
+
+surface_tension: surface_tension_stokes surface_tension_decoupled
+surface_tension_5: surface_tension_stokes_5 surface_tension_decoupled_5
+surface_tension_10-20: surface_tension_stokes_10-20 surface_tension_decoupled_10-20
+surface_tension_50-20: surface_tension_stokes_50-20 surface_tension_decoupled_50-20
+surface_tension_all: surface_tension surface_tension_5 surface_tension_10-20 surface_tension_50-20
