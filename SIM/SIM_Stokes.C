@@ -1117,13 +1117,27 @@ sim_stokesSolver<T>::solve(
       Ap.makeCompressed();
       At.makeCompressed();
     }
+
+    // enforce surface tension pressure boundary conditions
+    BlockVectorType gfst = buildGhostFluidSurfaceTensionPressureVector(sweights, surfpres);
+    BlockVectorType ust  = buildSurfaceTensionRHS(sweights, density, gfst);
+    // build remaining necessary operators
+    BlockMatrixType WFu(myNumVelocityVars, myNumVelocityVars);
+    const UT_VoxelArrayF &u_vol_fluid = *cweights[4]->field();
+    const UT_VoxelArrayF &v_vol_fluid = *cweights[5]->field();
+    const UT_VoxelArrayF &w_vol_fluid = *cweights[6]->field();
+    buildVelocityWeightMatrix<false>(u_vol_fluid, v_vol_fluid, w_vol_fluid, WFu);
+    BlockMatrixType G(myNumVelocityVars, myNumPressureVars);
+    buildGradientOperator(G); // sums surface tension values around one cell
+
     if ( myScheme == DECOUPLED_FANCY || myScheme == DECOUPLED_NOEXPANSION_FANCY )
     {
-      b = Bp*uold;
+      b = Bp*uold + G.transpose()*WFu*ust;
       result = solveSystemEigen(Ap,b,p);
       if (result != SUCCESS)
         return result;
       uold -= H*p;
+      uold += (1.0/dx) * ust;
     }
 
     // Viscosity solve
@@ -1134,11 +1148,12 @@ sim_stokesSolver<T>::solve(
     uold -= Ht*t;
 
     // Pressure solve
-    b = Bp*uold;
+    b = Bp*uold + G.transpose()*WFu*ust;
     result = solveSystemEigen(Ap,b,p);
     if (result != SUCCESS)
       return result;
     uold -= H*p;
+    uold += (1.0/dx) * ust;
 
     updateVelocitiesBlockwise(uold, colvel, valid, vel);
   }
