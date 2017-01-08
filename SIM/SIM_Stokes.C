@@ -1682,12 +1682,15 @@ SolveType sim_stokesSolver<T>::solveType(
   switch ( fidx )
   {
     case FACEX:
+      if ( u_oob(i-1,j,k) || u_oob(i+1,j,k) ) return COLLISION;
       if ( u_vol_fluid(i,j,k) < 0.5 ) return COLLISION;
 
     case FACEY:
+      if ( v_oob(i,j-1,k) || v_oob(i,j+1,k) ) return COLLISION;
       if ( v_vol_fluid(i,j,k) < 0.5 ) return COLLISION;
 
     case FACEZ:
+      if ( w_oob(i,j,k-1) || w_oob(i,j,k+1) ) return COLLISION;
       if ( w_vol_fluid(i,j,k) < 0.5 ) return COLLISION;
 
     default:
