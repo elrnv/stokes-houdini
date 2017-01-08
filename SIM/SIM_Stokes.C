@@ -1183,20 +1183,20 @@ sim_stokesSolver<T>::addUTerm(int row_index, int i, int j, int k, float sign, fl
     double factor = sign * dt * outer_liquid * vel_fw / (rho * vel_lw);
 
     //-dp/dx
-    if(p_idx(i,   j,   k) >= 0)      rowentries.emplace_back(  p_idx(i,   j,   k),   -factor * parms.c_vol_liquid(i,   j,   k));
-    if(p_idx(i-1, j,   k) >= 0)      rowentries.emplace_back(  p_idx(i-1, j,   k),   +factor * parms.c_vol_liquid(i-1, j,   k));
+    if(isInSystem(p_idx(i,   j,   k)))      rowentries.emplace_back(  p_idx(i,   j,   k),   -factor * parms.c_vol_liquid(i,   j,   k));
+    if(isInSystem(p_idx(i-1, j,   k)))      rowentries.emplace_back(  p_idx(i-1, j,   k),   +factor * parms.c_vol_liquid(i-1, j,   k));
 
     //dtxx/dx
-    if(txx_idx(i,   j,   k) >= 0)    rowentries.emplace_back(txx_idx(i,   j,   k),   +factor * parms.c_vol_liquid(i,   j,   k));
-    if(txx_idx(i-1, j,   k) >= 0)    rowentries.emplace_back(txx_idx(i-1, j,   k),   -factor * parms.c_vol_liquid(i-1, j,   k));
+    if(isInSystem(txx_idx(i,   j,   k)))    rowentries.emplace_back(txx_idx(i,   j,   k),   +factor * parms.c_vol_liquid(i,   j,   k));
+    if(isInSystem(txx_idx(i-1, j,   k)))    rowentries.emplace_back(txx_idx(i-1, j,   k),   -factor * parms.c_vol_liquid(i-1, j,   k));
 
     //dtxy/dy
-    if(txy_idx(i,   j+1, k) >= 0)    rowentries.emplace_back(txy_idx(i,   j+1, k),   +factor * parms.ez_vol_liquid(i,   j+1, k));
-    if(txy_idx(i,   j,   k) >= 0)    rowentries.emplace_back(txy_idx(i,   j,   k),   -factor * parms.ez_vol_liquid(i,   j,   k));
+    if(isInSystem(txy_idx(i,   j+1, k)))    rowentries.emplace_back(txy_idx(i,   j+1, k),   +factor * parms.ez_vol_liquid(i,   j+1, k));
+    if(isInSystem(txy_idx(i,   j,   k)))    rowentries.emplace_back(txy_idx(i,   j,   k),   -factor * parms.ez_vol_liquid(i,   j,   k));
 
     //dtxz/dz
-    if(txz_idx(i,   j,   k+1) >= 0)  rowentries.emplace_back(txz_idx(i,   j,   k+1), +factor * parms.ey_vol_liquid(i,   j,   k+1));
-    if(txz_idx(i,   j,   k) >= 0)    rowentries.emplace_back(txz_idx(i,   j,   k),   -factor * parms.ey_vol_liquid(i,   j,   k));
+    if(isInSystem(txz_idx(i,   j,   k+1)))  rowentries.emplace_back(txz_idx(i,   j,   k+1), +factor * parms.ey_vol_liquid(i,   j,   k+1));
+    if(isInSystem(txz_idx(i,   j,   k)))    rowentries.emplace_back(txz_idx(i,   j,   k),   -factor * parms.ey_vol_liquid(i,   j,   k));
 
     //u*
     b(row_index) -= sign * outer_liquid * vel_fw * parms.u(i,j,k) * dx;
@@ -1231,20 +1231,20 @@ sim_stokesSolver<T>::addVTerm(int row_index, int i, int j, int k, float sign, fl
     double factor = sign * dt * outer_liquid * vel_fw / (rho * vel_lw);
 
     //-dp/dy
-    if(p_idx(i,   j,   k) >= 0)     rowentries.emplace_back(  p_idx(i,   j,   k),   -factor * parms.c_vol_liquid(i,   j,   k));
-    if(p_idx(i,   j-1, k) >= 0)     rowentries.emplace_back(  p_idx(i,   j-1, k),   +factor * parms.c_vol_liquid(i,   j-1, k));
+    if(isInSystem(p_idx(i,   j,   k)))     rowentries.emplace_back(  p_idx(i,   j,   k),   -factor * parms.c_vol_liquid(i,   j,   k));
+    if(isInSystem(p_idx(i,   j-1, k)))     rowentries.emplace_back(  p_idx(i,   j-1, k),   +factor * parms.c_vol_liquid(i,   j-1, k));
 
     //dtxy/dx
-    if(txy_idx(i+1, j,   k) >= 0)   rowentries.emplace_back(txy_idx(i+1, j,   k),   +factor * parms.ez_vol_liquid(i+1, j,   k));
-    if(txy_idx(i,   j,   k) >= 0)   rowentries.emplace_back(txy_idx(i,   j,   k),   -factor * parms.ez_vol_liquid(i,   j,   k));
+    if(isInSystem(txy_idx(i+1, j,   k)))   rowentries.emplace_back(txy_idx(i+1, j,   k),   +factor * parms.ez_vol_liquid(i+1, j,   k));
+    if(isInSystem(txy_idx(i,   j,   k)))   rowentries.emplace_back(txy_idx(i,   j,   k),   -factor * parms.ez_vol_liquid(i,   j,   k));
 
     //dtyy/dy
-    if(tyy_idx(i,   j,   k) >= 0)   rowentries.emplace_back(tyy_idx(i,   j,   k),   +factor * parms.c_vol_liquid(i,   j,   k));
-    if(tyy_idx(i,   j-1, k) >= 0)   rowentries.emplace_back(tyy_idx(i,   j-1, k),   -factor * parms.c_vol_liquid(i,   j-1, k));
+    if(isInSystem(tyy_idx(i,   j,   k)))   rowentries.emplace_back(tyy_idx(i,   j,   k),   +factor * parms.c_vol_liquid(i,   j,   k));
+    if(isInSystem(tyy_idx(i,   j-1, k)))   rowentries.emplace_back(tyy_idx(i,   j-1, k),   -factor * parms.c_vol_liquid(i,   j-1, k));
 
     //dtyz/dz
-    if(tyz_idx(i,   j,   k+1) >= 0) rowentries.emplace_back(tyz_idx(i,   j,   k+1), +factor * parms.ex_vol_liquid(i,   j,   k+1));
-    if(tyz_idx(i,   j,   k) >= 0)   rowentries.emplace_back(tyz_idx(i,   j,   k),   -factor * parms.ex_vol_liquid(i,   j,   k));
+    if(isInSystem(tyz_idx(i,   j,   k+1))) rowentries.emplace_back(tyz_idx(i,   j,   k+1), +factor * parms.ex_vol_liquid(i,   j,   k+1));
+    if(isInSystem(tyz_idx(i,   j,   k)))   rowentries.emplace_back(tyz_idx(i,   j,   k),   -factor * parms.ex_vol_liquid(i,   j,   k));
 
     b(row_index) -= sign * outer_liquid * vel_fw * parms.v(i,j,k) * dx;
 
@@ -1278,23 +1278,23 @@ sim_stokesSolver<T>::addWTerm(int row_index, int i, int j, int k, float sign, fl
     double factor = sign * dt * outer_liquid * vel_fw / (rho * vel_lw);
 
     //-dpdz
-    if(p_idx(i,   j,   k) >= 0)     rowentries.emplace_back(  p_idx(i,   j,   k),   -factor * parms.c_vol_liquid(i,   j,   k));
-    if(p_idx(i,   j,   k-1) >= 0)   rowentries.emplace_back(  p_idx(i,   j,   k-1), +factor * parms.c_vol_liquid(i,   j,   k-1));
+    if(isInSystem(p_idx(i,   j,   k)))     rowentries.emplace_back(  p_idx(i,   j,   k),   -factor * parms.c_vol_liquid(i,   j,   k));
+    if(isInSystem(p_idx(i,   j,   k-1)))   rowentries.emplace_back(  p_idx(i,   j,   k-1), +factor * parms.c_vol_liquid(i,   j,   k-1));
 
     //dtxz/dx
-    if(txz_idx(i+1, j,   k) >= 0)   rowentries.emplace_back(txz_idx(i+1, j,   k),   +factor * parms.ey_vol_liquid(i+1, j,   k));
-    if(txz_idx(i,   j,   k) >= 0)   rowentries.emplace_back(txz_idx(i,   j,   k),   -factor * parms.ey_vol_liquid(i,   j,   k));
+    if(isInSystem(txz_idx(i+1, j,   k)))   rowentries.emplace_back(txz_idx(i+1, j,   k),   +factor * parms.ey_vol_liquid(i+1, j,   k));
+    if(isInSystem(txz_idx(i,   j,   k)))   rowentries.emplace_back(txz_idx(i,   j,   k),   -factor * parms.ey_vol_liquid(i,   j,   k));
 
     //dtyz/dy
-    if(tyz_idx(i,   j+1, k) >= 0)   rowentries.emplace_back(tyz_idx(i,   j+1, k),   +factor * parms.ex_vol_liquid(i,   j+1, k));
-    if(tyz_idx(i,   j,   k) >= 0)   rowentries.emplace_back(tyz_idx(i,   j,   k),   -factor * parms.ex_vol_liquid(i,   j,   k));
+    if(isInSystem(tyz_idx(i,   j+1, k)))   rowentries.emplace_back(tyz_idx(i,   j+1, k),   +factor * parms.ex_vol_liquid(i,   j+1, k));
+    if(isInSystem(tyz_idx(i,   j,   k)))   rowentries.emplace_back(tyz_idx(i,   j,   k),   -factor * parms.ex_vol_liquid(i,   j,   k));
 
     //dtzz/dz -> -dtxx/dz - dtyy/dz
-    if(txx_idx(i,   j,   k) >= 0)   rowentries.emplace_back(txx_idx(i,   j,   k),   -factor * parms.c_vol_liquid(i,   j,   k));
-    if(txx_idx(i,   j,   k-1) >= 0) rowentries.emplace_back(txx_idx(i,   j,   k-1), +factor * parms.c_vol_liquid(i,   j,   k-1));
+    if(isInSystem(txx_idx(i,   j,   k)))   rowentries.emplace_back(txx_idx(i,   j,   k),   -factor * parms.c_vol_liquid(i,   j,   k));
+    if(isInSystem(txx_idx(i,   j,   k-1))) rowentries.emplace_back(txx_idx(i,   j,   k-1), +factor * parms.c_vol_liquid(i,   j,   k-1));
 
-    if(tyy_idx(i,   j,   k) >= 0)   rowentries.emplace_back(tyy_idx(i,   j,   k),   -factor * parms.c_vol_liquid(i,   j,   k));
-    if(tyy_idx(i,   j,   k-1) >= 0) rowentries.emplace_back(tyy_idx(i,   j,   k-1), +factor * parms.c_vol_liquid(i,   j,   k-1));
+    if(isInSystem(tyy_idx(i,   j,   k)))   rowentries.emplace_back(tyy_idx(i,   j,   k),   -factor * parms.c_vol_liquid(i,   j,   k));
+    if(isInSystem(tyy_idx(i,   j,   k-1))) rowentries.emplace_back(tyy_idx(i,   j,   k-1), +factor * parms.c_vol_liquid(i,   j,   k-1));
 
     b(row_index) -= sign * outer_liquid * vel_fw * parms.w(i,j,k) * dx;
 
