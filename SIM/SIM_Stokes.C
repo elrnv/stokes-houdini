@@ -1095,7 +1095,7 @@ sim_stokesSolver<T>::solve(
     buildGradientOperator(G); // sums surface tension values around one cell
 
     BlockVectorType p( getNumPressureVars() );
-    BlockVectorType b = B*uold + G.transpose()*WFu*ust;
+    BlockVectorType b = B*uold;// + G.transpose()*WFu*ust;
     result = solveSystemEigen(A,b,p);
     if (result != SUCCESS)
       return result;
@@ -1682,15 +1682,15 @@ SolveType sim_stokesSolver<T>::solveType(
   switch ( fidx )
   {
     case FACEX:
-      if ( u_oob(i-1,j,k) || u_oob(i+1,j,k) ) return COLLISION;
+      if ( u_oob(i+1,j,k) ) return COLLISION;
       if ( u_vol_fluid(i,j,k) < 0.5 ) return COLLISION;
 
     case FACEY:
-      if ( v_oob(i,j-1,k) || v_oob(i,j+1,k) ) return COLLISION;
+      if ( v_oob(i,j+1,k) ) return COLLISION;
       if ( v_vol_fluid(i,j,k) < 0.5 ) return COLLISION;
 
     case FACEZ:
-      if ( w_oob(i,j,k-1) || w_oob(i,j,k+1) ) return COLLISION;
+      if ( w_oob(i,j,k+1) ) return COLLISION;
       if ( w_vol_fluid(i,j,k) < 0.5 ) return COLLISION;
 
     default:
@@ -1864,9 +1864,6 @@ sim_stokesSolver<T>::buildVelocityIndices(
     const SIM_RawField * const* surf_weights,
     const SIM_RawField * const* col_weights)
 {
-#ifndef BLOCKWISE_STOKES
-  assert(myScheme != STOKES);
-#endif
   initAndClassifyIndex(surf_weights, col_weights, myUIndex, FACEX);
   initAndClassifyIndex(surf_weights, col_weights, myVIndex, FACEY);
   initAndClassifyIndex(surf_weights, col_weights, myWIndex, FACEZ);
