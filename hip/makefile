@@ -76,7 +76,7 @@ dam_break_stokes:
 dam_break: dam_break_stokes dam_break_houdini
 
 buckling:
-	$(HXX) buckling.hip dopnet1/output
+	$(HXX) buckling.hipnc dopnet1/output
 
 surface_tension_stokes:
 	$(HXX) surface_tension.hip stokes_fluid/stokes
