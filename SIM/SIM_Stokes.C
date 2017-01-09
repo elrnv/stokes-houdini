@@ -1095,7 +1095,7 @@ sim_stokesSolver<T>::solve(
     buildGradientOperator(G); // sums surface tension values around one cell
 
     BlockVectorType p( getNumPressureVars() );
-    BlockVectorType b = B*uold;// + G.transpose()*WFu*ust;
+    BlockVectorType b = B*uold + G.transpose()*WFu*ust;
     result = solveSystemEigen(A,b,p);
     if (result != SUCCESS)
       return result;
