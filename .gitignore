@@ -1,0 +1,7 @@
+EigenPathMakefile
+geo/
+sim/
+stats/
+*.o
+*.so
+*.dylib
