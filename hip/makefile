@@ -35,7 +35,7 @@ usage:
 	@echo "   surface_tension_stokes"
 	@echo "   surface_tension_decoupled"
 	@echo "   surface_tension"
-
+	@echo "   ball"
 
 collision_houdini:
 	$(HXX) collision.hip houdini_fluid/houdini_fluid
@@ -117,3 +117,8 @@ surface_tension_all: surface_tension_5 surface_tension_10-5 surface_tension_10-2
 
 rotating_ball:
 	$(HXX) rotating_ball.hip fluid/together
+
+ball:
+	$(HXX) ball_thru_old.hip dopnet1/output
+
+# WIP: rendering targets. It's easier to setup rendering targets from this makefile 

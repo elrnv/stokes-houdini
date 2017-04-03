@@ -1,24 +1,23 @@
 """
-A simple script to kick off a certain ROP remotely, optionally
-with a given framerange.
+A simple script to kick off a certain ROP remotely
 Usage: hython path/to/script/houBatch.py /path/to/hipfile /hou/path/to/rop
-TODO: Add options for multiple ROPs, hperf.
 """
 import hou, sys
+import argparse
 from os.path import basename, splitext, dirname, exists
 from os import makedirs
 
-usage = "usage: run.py <hip file> <node name relative to /obj/>"
-
-if len(sys.argv) != 3:
-  print usage
-  sys.exit(1)
+parser = argparse.ArgumentParser()
+parser.add_argument("hip_file", help="Hip file to load, which contains the desired node to be run.")
+parser.add_argument("node_path", help="Node path relative to /obj/. This node must have a button named <executebackground>")
+parser.add_argument("--nohperf", help="Do not collect performance stats.", action="store_true")
+args = parser.parse_args()
 
 # Load the hip file
-hipfile = sys.argv[1]
+hipfile = args.hip_file
 hou.hipFile.load(hipfile, ignore_load_warnings=True)
 
-nodepath = sys.argv[2]
+nodepath = args.node_path
 node = hou.node("/obj/" + nodepath)
 if node is None:
   print "Couldn't locate the node to cook"
@@ -29,31 +28,40 @@ statspath = "stats"
 if not exists(statspath):
   makedirs(statspath)
 
-nodepath = nodepath.replace("/","-")
-projname = splitext(basename(hipfile))[0] # project name
-profilename = projname + "_" + nodepath
 
-# setup performance monitor
-opts = hou.PerfMonRecordOptions(
-    cook_stats = False,
-    solve_stats = True,
-    draw_stats = False,
-    gpu_draw_stats = False,
-    viewport_stats = False,
-    script_stats = False,
-    render_stats = False,
-    thread_stats = True,
-    frame_stats = False,
-    memory_stats = True,
-    errors = True) # new options object
-profile = hou.perfMon.startProfile(profilename, opts)
+# do the thing function
+def run(node):
+  node.parm("executebackground").pressButton()
+  
 
-# do the thing
-node.parm("executebackground").pressButton()
+if args.nohperf:
+  run(node) # do the thing
 
-profile.stop()
+else:
+  nodepath = nodepath.replace("/","-")
+  projectname = splitext(basename(hipfile))[0]
+  profilename = projectname + "_" + nodepath
 
-hperfpath = statspath + "/" + profilename + ".hperf"
+  # setup performance monitor
+  opts = hou.PerfMonRecordOptions(
+      cook_stats = False,
+      solve_stats = True,
+      draw_stats = False,
+      gpu_draw_stats = False,
+      viewport_stats = False,
+      script_stats = False,
+      render_stats = False,
+      thread_stats = True,
+      frame_stats = False,
+      memory_stats = True,
+      errors = True) # new options object
+  profile = hou.perfMon.startProfile(profilename, opts)
 
-print("Saving hperf to " + hperfpath)
-profile.save(hperfpath)
+  run(node) # do the thing
+
+  profile.stop()
+
+  hperfpath = statspath + "/" + profilename + ".hperf"
+
+  print("Saving hperf to " + hperfpath)
+  profile.save(hperfpath)
