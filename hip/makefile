@@ -114,3 +114,6 @@ surface_tension_10-5: surface_tension_stokes_10-5 surface_tension_decoupled_10-5
 surface_tension_10-20: surface_tension_stokes_10-20 surface_tension_decoupled_10-20
 surface_tension_50-20: surface_tension_stokes_50-20 surface_tension_decoupled_50-20
 surface_tension_all: surface_tension_5 surface_tension_10-5 surface_tension_10-20 surface_tension_50-20
+
+rotating_ball:
+	$(HXX) rotating_ball.hip fluid/together
