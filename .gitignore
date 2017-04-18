@@ -2,6 +2,9 @@ EigenPathMakefile
 geo/
 sim/
 stats/
+render/
+backup/
 *.o
 *.so
 *.dylib
+*.exr
