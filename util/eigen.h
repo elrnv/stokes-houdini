@@ -50,6 +50,8 @@ using Vec4ui = Eigen::Matrix<unsigned int, 4, 1>;
 using Vec6i = Eigen::Matrix<int, 6, 1>;
 
 template<typename T>
+using MatrixX = Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>;
+template<typename T>
 using VecX = Eigen::Matrix<T, Eigen::Dynamic, 1>;
 template<typename T>
 using Vec2 = Eigen::Matrix<T, 2, 1>;

@@ -19,6 +19,7 @@
 
 //#define BLOCKWISE_STOKES
 //#define USE_EIGEN_SOLVER_FOR_BLOCKWISE_STOKES
+#define PRINT_ROTATING_BALL_ANGULAR_MOMENTUM
 
 using std::tuple;
 using std::make_tuple;
@@ -87,7 +88,7 @@ public:
       FieldIndex fidx) const;
   bool isInSystem(exint idx) const { return idx >= 0; }
 
-  // return true if eelocity index represents a collision velocity in the system
+  // return true if velocity index represents a collision velocity in the system
   bool isCollision(exint idx) const { return idx == COLLISION || idx >= myCollisionIndex; }
 
 
@@ -1022,6 +1023,7 @@ SIM_Stokes::solveGasSubclass(SIM_Engine &engine,
     velocity->pubHandleModification();
     if ( valid )
       valid->pubHandleModification();
+
   }
   return result == SUCCESS || result == NOCHANGE;
 }
@@ -1157,6 +1159,85 @@ sim_stokesSolver<T>::solve(
 
     updateVelocitiesBlockwise(uold, colvel, valid, vel);
   }
+
+#ifdef PRINT_ROTATING_BALL_ANGULAR_MOMENTUM
+  if (result == SUCCESS)
+  {
+    // compute and print out angular momentum
+    const UT_VoxelArrayF &ex_weights = *cweights[1]->field();
+    const UT_VoxelArrayF &ey_weights = *cweights[2]->field();
+    const UT_VoxelArrayF &ez_weights = *cweights[3]->field();
+    const UT_VoxelArrayF &u = *vel.getField(0)->field();
+    const UT_VoxelArrayF &v = *vel.getField(1)->field();
+    const UT_VoxelArrayF &w = *vel.getField(2)->field();
+
+    UT_VoxelArrayIteratorI vit;
+
+    UT_Vector3 min(1e18,1e18,1e18);
+    UT_Vector3 max(-1e18,-1e18,-1e18);
+    UT_Vector3 pos(0,0,0);
+    vit.setConstArray(myCentralIndex.field());
+    for ( vit.rewind(); !vit.atEnd(); vit.advance() )
+    {
+      int i = vit.x(), j = vit.y(), k = vit.z();
+      if ( !isInSystem(vit.getValue()) )
+        continue;
+
+      cweights[0]->field()->indexToPos(i,j,k,pos);
+      min = SYSmin(pos,min);
+      max = SYSmax(pos,max);
+    }
+    UT_Vector3 centroid = 0.5*(max + min);
+    UT_Vector3 angular_momentum(0,0,0);
+    vit.setConstArray(myTyzIndex.field());
+    for ( vit.rewind(); !vit.atEnd(); vit.advance() )
+    {
+      int i = vit.x(), j = vit.y(), k = vit.z();
+      if ( !isInSystem(vit.getValue()) && vit.getValue() != AIR )
+        continue;
+
+      ex_weights.indexToPos(i,j,k,pos);
+      double v_comp = 0.5*(v.getValue(i,j,k) + v.getValue(i,j,k-1));
+      double w_comp = 0.5*(w.getValue(i,j,k) + w.getValue(i,j-1,k));
+      double y = pos[1] - centroid[1];
+      double z = pos[2] - centroid[2];
+      angular_momentum[0] += ex_weights.getValue(i,j,k)*(y*w_comp - z*v_comp);
+    }
+
+    vit.setConstArray(myTxzIndex.field());
+    for ( vit.rewind(); !vit.atEnd(); vit.advance() )
+    {
+      int i = vit.x(), j = vit.y(), k = vit.z();
+      if ( !isInSystem(vit.getValue()) && vit.getValue() != AIR )
+        continue;
+
+      ey_weights.indexToPos(i,j,k,pos);
+      double u_comp = 0.5*(u.getValue(i,j,k) + u.getValue(i,j,k-1));
+      double w_comp = 0.5*(w.getValue(i,j,k) + w.getValue(i-1,j,k));
+      double x = pos[0] - centroid[0];
+      double z = pos[2] - centroid[2];
+      angular_momentum[1] += ey_weights.getValue(i,j,k)*(z*u_comp - x*w_comp);
+    }
+
+    vit.setConstArray(myTxyIndex.field());
+    for ( vit.rewind(); !vit.atEnd(); vit.advance() )
+    {
+      int i = vit.x(), j = vit.y(), k = vit.z();
+      if ( !isInSystem(vit.getValue()) && vit.getValue() != AIR )
+        continue;
+
+      ez_weights.indexToPos(i,j,k,pos);
+      double u_comp = 0.5*(u.getValue(i,j,k) + u.getValue(i,j-1,k));
+      double v_comp = 0.5*(v.getValue(i,j,k) + v.getValue(i-1,j,k));
+      double x = pos[0] - centroid[0];
+      double y = pos[1] - centroid[1];
+      angular_momentum[2] += ez_weights.getValue(i,j,k)*(x*v_comp - y*u_comp);
+    }
+
+    angular_momentum *= dx*dx*dx; // integrate over cell
+    std::cout << " angular_momentum = " << angular_momentum << "; norm = " << angular_momentum.length() << std::endl;
+  }
+#endif // PRINT_ROTATING_BALL_ANGULAR_MOMENTUM
 
   return result;
 }
@@ -1649,32 +1730,22 @@ SolveType sim_stokesSolver<T>::solveType(
 
     case CENTER:
       insystem =
-        ( !c_oob(i,j,k) &&
-          (c_vol_liquid(i,j,k) || c_vol_fluid(i,j,k)));
+        ( !c_oob(i,j,k) && c_vol_liquid(i,j,k) && c_vol_fluid(i,j,k) );
       break;
 
     case EDGEXY:
       insystem =
-        ( !txy_oob(i,j,k) &&
-          ez_vol_liquid(i,j,k) && ez_vol_fluid(i,j,k) &&
-          u_vol_liquid(i,j,k) && !u_oob(i,j-1,k) && u_vol_liquid(i,j-1,k) && 
-          v_vol_liquid(i,j,k) && !v_oob(i-1,j,k) && v_vol_liquid(i-1,j,k) );
+        ( !txy_oob(i,j,k) && ez_vol_liquid(i,j,k) && ez_vol_fluid(i,j,k) );
       break;
 
     case EDGEXZ:
       insystem =
-        ( !txz_oob(i,j,k) &&
-          ey_vol_liquid(i,j,k) && ey_vol_fluid(i,j,k) &&
-          u_vol_liquid(i,j,k) && !u_oob(i,j,k-1) && u_vol_liquid(i,j,k-1) && 
-          w_vol_liquid(i,j,k) && !w_oob(i-1,j,k) && w_vol_liquid(i-1,j,k) );
+        ( !txz_oob(i,j,k) && ey_vol_liquid(i,j,k) && ey_vol_fluid(i,j,k) );
       break;
 
     case EDGEYZ:
       insystem =
-        ( !tyz_oob(i,j,k) &&
-          ex_vol_liquid(i,j,k) && ex_vol_fluid(i,j,k) &&
-          v_vol_liquid(i,j,k) && !v_oob(i,j,k-1) && v_vol_liquid(i,j,k-1) && 
-          w_vol_liquid(i,j,k) && !w_oob(i,j-1,k) && w_vol_liquid(i,j-1,k) );
+        ( !tyz_oob(i,j,k) && ex_vol_liquid(i,j,k) && ex_vol_fluid(i,j,k) );
       break;
 
     default:
@@ -1705,6 +1776,21 @@ SolveType sim_stokesSolver<T>::solveType(
 
   switch ( fidx )
   {
+    case EDGEXY:
+      insystem =
+          u_vol_liquid(i,j,k) && !u_oob(i,j-1,k) && u_vol_liquid(i,j-1,k) && 
+          v_vol_liquid(i,j,k) && !v_oob(i-1,j,k) && v_vol_liquid(i-1,j,k);
+      break;
+    case EDGEXZ:
+      insystem =
+          u_vol_liquid(i,j,k) && !u_oob(i,j,k-1) && u_vol_liquid(i,j,k-1) && 
+          w_vol_liquid(i,j,k) && !w_oob(i-1,j,k) && w_vol_liquid(i-1,j,k);
+      break;
+    case EDGEYZ:
+      insystem =
+          v_vol_liquid(i,j,k) && !v_oob(i,j,k-1) && v_vol_liquid(i,j,k-1) && 
+          w_vol_liquid(i,j,k) && !w_oob(i,j-1,k) && w_vol_liquid(i,j-1,k);
+      break;
     case FACEX:
       insystem = 
         ( u_vol_liquid(i,j,k) &&
@@ -1731,18 +1817,16 @@ SolveType sim_stokesSolver<T>::solveType(
 
     case CENTER:
       insystem =
-        ( !c_oob(i,j,k) &&
-          c_vol_liquid(i,j,k) && c_vol_fluid(i,j,k) &&
-          (!u_oob(i+1,j,k) && u_vol_liquid(i+1,j,k)) && u_vol_liquid(i,j,k) && 
-          (!v_oob(i,j+1,k) && v_vol_liquid(i,j+1,k)) && v_vol_liquid(i,j,k) &&
-          (!w_oob(i,j,k+1) && w_vol_liquid(i,j,k+1)) && w_vol_liquid(i,j,k) );
+        (!u_oob(i+1,j,k) && u_vol_liquid(i+1,j,k)) && u_vol_liquid(i,j,k) && 
+        (!v_oob(i,j+1,k) && v_vol_liquid(i,j+1,k)) && v_vol_liquid(i,j,k) &&
+        (!w_oob(i,j,k+1) && w_vol_liquid(i,j,k+1)) && w_vol_liquid(i,j,k);
       break;
 
     default:
       break;
   }
 
-  if ( fidx == CENTER )
+  if ( fidx == CENTER || fidx == EDGEXY || fidx == EDGEXZ || fidx == EDGEYZ )
   {
     return insystem ? SOLVED : AIR; // needed for surface tension (doesn't get an index)
   }
@@ -2499,17 +2583,17 @@ sim_stokesSolver<T>::ghostFluidSurfaceTensionPressure(
   {
     case 0:
       uidx = myUIndex(i,j,k);
-      pidx0 = myCentralIndex(i-1,j,k);
+      pidx0 = p_idx(i-1,j,k);
       p0 = sp.getValue(i-1,j,k);
       break;
     case 1:
       uidx = myVIndex(i,j,k);
-      pidx0 = myCentralIndex(i,j-1,k);
+      pidx0 = p_idx(i,j-1,k);
       p0 = sp.getValue(i,j-1,k);
       break;
     case 2:
       uidx = myWIndex(i,j,k);
-      pidx0 = myCentralIndex(i,j,k-1);
+      pidx0 = p_idx(i,j,k-1);
       p0 = sp.getValue(i,j,k-1);
       break;
   }
@@ -2701,7 +2785,6 @@ template<typename MatrixType>
 bool
 isMatrixValid(const MatrixType& A)
 {
-  return true;
   for ( int k = 0; k < A.outerSize(); ++k )
   {
     for ( typename MatrixType::InnerIterator it(A, k); it; ++it )
@@ -2712,6 +2795,22 @@ isMatrixValid(const MatrixType& A)
 
           return false;
       }
+    }
+  }
+  return true;
+}
+
+// returns false if symmetric matrix A contains any rows (or columns) of all zeros
+template<typename MatrixType>
+bool
+isMatrixPruned(const MatrixType& A)
+{
+  for (int k = 0; k < A.outerSize(); ++k )
+  {
+    typename MatrixType::InnerIterator it(A,k);
+    if (!it)
+    {
+      return false;
     }
   }
   return true;
@@ -2844,9 +2943,24 @@ void sim_stokesSolver<T>::buildSystemBlockwise(
 
   assembleBlockSystem(WLp, WLuinv, WFu, WLt, WFt, G, D, Pinv, Minv, App, Bp, Hp, Att, Bt, Ht);
   Atp = dt*WLt*D*Pinv*WLuinv*WFu*G*WLp;
+  //MatrixX<T> Attdense, Appdense, Atpdense;
+  //Attdense = MatrixX<T>(Att);
+  //Appdense = MatrixX<T>(App);
+  //Atpdense = MatrixX<T>(Atp);
+  //std::cerr << "Att = " << Attdense << std::endl;
+  //std::cerr << "App = " << Appdense << std::endl;
+  //std::cerr << "Atp = " << Atpdense << std::endl;
+  //
+  //std::cerr << "G^T = \n" << G.transpose() << std::endl;
+  //BlockMatrixType GtG = G.transpose() * G;
+  //std::cerr << "G^T*G = \n" << GtG << std::endl;
+  //std::cerr << "App = \n" << App << std::endl;
+  //std::cerr << "Pinv = \n" << Pinv << std::endl;
+  //std::cerr << "WLp = \n" << WLp << std::endl;
 
   assert(isMatrixValid(App));
   assert(isMatrixValid(Att));
+  assert(isMatrixValid(Atp));
 
   auto elts = getNumStokesVars();
 
@@ -2928,7 +3042,9 @@ sim_stokesSolver<T>::buildSurfaceTensionRHSAlt(
     const SIM_RawField & densfield,
     const BlockVectorType &pbc) const -> BlockVectorType
 {
+#ifndef BLOCKWISE_STOKES
   assert(myScheme != STOKES);
+#endif
 
   const UT_VoxelArrayF &c_vol_liquid = *surf_weights[0]->field();
   const UT_VoxelArrayF &u_vol_liquid = *surf_weights[4]->field();
@@ -2955,7 +3071,9 @@ sim_stokesSolver<T>::buildSurfaceTensionRHS(
     const SIM_RawField & densfield,
     const BlockVectorType &ust) const -> BlockVectorType
 {
+#ifndef BLOCKWISE_STOKES
   assert(myScheme != STOKES);
+#endif
 
   const UT_VoxelArrayF &u_vol_liquid = *surf_weights[4]->field();
   const UT_VoxelArrayF &v_vol_liquid = *surf_weights[5]->field();
@@ -3305,14 +3423,59 @@ sim_stokesSolver<T>::solveBlockwiseStokes(
     A.makeCompressed();
   }
 
-#ifndef NDEBUG
-  // check that A has no empty columns (or rows since it's symmetric)
-  for (int k = 0; k < A.outerSize(); ++k )
+  if ( 0 )
   {
-    typename BlockMatrixType::InnerIterator it(A,k);
-    assert(it);
+  if ( !isMatrixPruned(A) )
+  {
+    UT_VoxelArrayIteratorI vit;
+    std::cerr << " u indices: " << std::endl;
+    vit.setConstArray(myUIndex.field());
+    for ( vit.rewind(); !vit.atEnd(); vit.advance() )
+    {
+      if ( isInSystem(vit.getValue()) )
+        std::cerr << vit.getValue() << " ";
+      else if ( isCollision(vit.getValue()) )
+        std::cerr << "c ";
+    }
+    std::cerr <<  std::endl;
+
+    std::cerr << " v indices: " << std::endl;
+    vit.setConstArray(myVIndex.field());
+    for ( vit.rewind(); !vit.atEnd(); vit.advance() )
+    {
+      if ( isInSystem(vit.getValue()) )
+        std::cerr << vit.getValue() << " ";
+      else if ( isCollision(vit.getValue()) )
+        std::cerr << "c ";
+    }
+    std::cerr <<  std::endl;
+
+    std::cerr << " w indices: " << std::endl;
+    vit.setConstArray(myWIndex.field());
+    for ( vit.rewind(); !vit.atEnd(); vit.advance() )
+    {
+      if ( isInSystem(vit.getValue()) )
+        std::cerr << vit.getValue() << " ";
+      else if ( isCollision(vit.getValue()) )
+        std::cerr << "c ";
+    }
+    std::cerr <<  std::endl;
+
+    std::cerr << " p indices: " << std::endl;
+    vit.setConstArray(myCentralIndex.field());
+    for ( vit.rewind(); !vit.atEnd(); vit.advance() )
+    {
+      if ( isInSystem(vit.getValue()) )
+      {
+        std::cerr << vit.getValue();
+        std::cerr << " ";
+      }
+    }
+    std::cerr << std::endl;
+
+    return INVALID;
   }
-#endif
+  }
 
 #ifdef USE_EIGEN_SOLVER_FOR_BLOCKWISE_STOKES
   BlockVectorType x(system_size);
@@ -3522,9 +3685,10 @@ sim_stokesSolver<T>::solveSystemEigen(
   PCG<T> solver;
   solver.setTolerance(tol);
   solver.setMaxIterations(3*system_size);
-  //SparseLU<double> solver;
+  //SparseLU<T> solver;
   //SimplicialLDLT<double> solver;
 
+  //std::cerr << "A size = " << A.rows() << "x" << A.cols() << std::endl;
   //auto start_time = clock();
   solver.compute( A );
   if ( solver.info() != Eigen::Success )
@@ -3547,10 +3711,14 @@ sim_stokesSolver<T>::solveSystemEigen(
       default:
         std::cout << "Unknown\n"; return FAILED;
     }
+
+    MatrixX<T> Adense;
+    Adense = MatrixX<T>(A);
+    T condition_number = Adense.inverse().norm() / Adense.norm();
+
+    std::cerr << "k(A) = " << condition_number << std::endl;
+
   }
-  //std::cerr << "elapsed solve time = " << double(clock() - start_time)/CLOCKS_PER_SEC << std::endl;
-//  for ( int i = 0; i < to_original.size(); ++i ) 
-//    x[to_original[i]] = smallx[i];
 
   UT_WorkBuffer extra_info;
   extra_info.sprintf("Iterations=%d, Error=%.6f", int(solver.iterations()), solver.error());
