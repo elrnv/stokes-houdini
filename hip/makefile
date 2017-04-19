@@ -35,6 +35,7 @@ usage:
 	@echo "   surface_tension_stokes"
 	@echo "   surface_tension_decoupled"
 	@echo "   surface_tension"
+	@echo "   rotating_ball"
 	@echo "   ball"
 
 collision_houdini:
@@ -115,8 +116,14 @@ surface_tension_10-20: surface_tension_stokes_10-20 surface_tension_decoupled_10
 surface_tension_50-20: surface_tension_stokes_50-20 surface_tension_decoupled_50-20
 surface_tension_all: surface_tension_5 surface_tension_10-5 surface_tension_10-20 surface_tension_50-20
 
-rotating_ball:
-	$(HXX) rotating_ball.hip fluid/together
+rotating_ball_stokes:
+	$(HXX) rotating_ball_stokes.hip fluid/together | tee -a momentum_stokes.txt
+rotating_ball_vp:
+	$(HXX) rotating_ball_vp.hip fluid/together | tee -a momentum_vp.txt
+rotating_ball_pvp:
+	$(HXX) rotating_ball_pvp.hip fluid/together | tee -a momentum_pvp.txt
+
+rotating_ball: rotating_ball_stokes rotating_ball_vp rotating_ball_pvp
 
 ball:
 	$(HXX) ball_thru_old.hip dopnet1/output
