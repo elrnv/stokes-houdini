@@ -2943,6 +2943,7 @@ void sim_stokesSolver<T>::buildSystemBlockwise(
 
   assembleBlockSystem(WLp, WLuinv, WFu, WLt, WFt, G, D, Pinv, Minv, App, Bp, Hp, Att, Bt, Ht);
   Atp = dt*WLt*D*Pinv*WLuinv*WFu*G*WLp;
+  // Print matrices in dense form
   //MatrixX<T> Attdense, Appdense, Atpdense;
   //Attdense = MatrixX<T>(Att);
   //Appdense = MatrixX<T>(App);
@@ -3688,8 +3689,6 @@ sim_stokesSolver<T>::solveSystemEigen(
   //SparseLU<T> solver;
   //SimplicialLDLT<double> solver;
 
-  //std::cerr << "A size = " << A.rows() << "x" << A.cols() << std::endl;
-  //auto start_time = clock();
   solver.compute( A );
   if ( solver.info() != Eigen::Success )
   {
@@ -3712,11 +3711,13 @@ sim_stokesSolver<T>::solveSystemEigen(
         std::cout << "Unknown\n"; return FAILED;
     }
 
-    MatrixX<T> Adense;
-    Adense = MatrixX<T>(A);
-    T condition_number = Adense.inverse().norm() / Adense.norm();
+    // Print condition number if solve fails to see if there is a problem with
+    // conditioning
+    //MatrixX<T> Adense;
+    //Adense = MatrixX<T>(A);
+    //T condition_number = Adense.inverse().norm() / Adense.norm();
 
-    std::cerr << "k(A) = " << condition_number << std::endl;
+    //std::cerr << "k(A) = " << condition_number << std::endl;
 
   }
 
