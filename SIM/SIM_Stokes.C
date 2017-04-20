@@ -17,9 +17,9 @@
 #include <iostream>
 #include "../util/eigen.h"
 
-//#define BLOCKWISE_STOKES
+#define BLOCKWISE_STOKES
 //#define USE_EIGEN_SOLVER_FOR_BLOCKWISE_STOKES
-#define PRINT_ROTATING_BALL_ANGULAR_MOMENTUM
+//#define PRINT_ROTATING_BALL_ANGULAR_MOMENTUM
 
 using std::tuple;
 using std::make_tuple;
@@ -75,7 +75,7 @@ public:
     , myNumStressVars(0)
     , myNumVelocityVars(0)
     , myNumPressureVars(0)
-    , myCollisionIndex(0)
+    , myCollisionIndex(std::numeric_limits<int>::max())
     , myScheme(solver.getScheme())
     , mySolver(solver)
     , myObject(obj)
@@ -121,7 +121,7 @@ public:
   void buildVelocityIndices(
       const SIM_RawField * const* surf_weights,
       const SIM_RawField * const* col_weights);
-  void buildIndices(
+  void classifyAndBuildIndices(
       const SIM_RawField * const* surf_weights,
       const SIM_RawField * const* col_weights);
 
@@ -1005,7 +1005,7 @@ SIM_Stokes::solveGasSubclass(SIM_Engine &engine,
   if ( float_precision == FLOAT32 )
   {
     sim_stokesSolver<fpreal32> solver(*this, obj, nx, ny, nz, dx, timestep);
-    solver.buildIndices(sweights, cweights);
+    solver.classifyAndBuildIndices(sweights, cweights);
     result = solver.solve(
         *surffield, sweights, cweights, *viscfield, *densfield, colvel, *surfpres, valid, *velocity);
   }
@@ -1013,7 +1013,7 @@ SIM_Stokes::solveGasSubclass(SIM_Engine &engine,
   {
     assert( float_precision == FLOAT64 ); // only one option left
     sim_stokesSolver<fpreal64> solver(*this, obj, nx, ny, nz, dx, timestep);
-    solver.buildIndices(sweights, cweights);
+    solver.classifyAndBuildIndices(sweights, cweights);
     result = solver.solve(
         *surffield, sweights, cweights, *viscfield, *densfield, colvel, *surfpres, valid, *velocity);
   }
@@ -1164,9 +1164,9 @@ sim_stokesSolver<T>::solve(
   if (result == SUCCESS)
   {
     // compute and print out angular momentum
-    const UT_VoxelArrayF &ex_weights = *cweights[1]->field();
-    const UT_VoxelArrayF &ey_weights = *cweights[2]->field();
-    const UT_VoxelArrayF &ez_weights = *cweights[3]->field();
+    const UT_VoxelArrayF &ex_weights = *sweights[1]->field();
+    const UT_VoxelArrayF &ey_weights = *sweights[2]->field();
+    const UT_VoxelArrayF &ez_weights = *sweights[3]->field();
     const UT_VoxelArrayF &u = *vel.getField(0)->field();
     const UT_VoxelArrayF &v = *vel.getField(1)->field();
     const UT_VoxelArrayF &w = *vel.getField(2)->field();
@@ -1717,20 +1717,26 @@ SolveType sim_stokesSolver<T>::solveType(
   switch ( fidx )
   {
     case FACEX:
-      insystem = ( !u_oob(i,j,k) && u_vol_fluid(i,j,k));
+      insystem = ( !u_oob(i,j,k) && u_vol_fluid(i,j,k) && u_vol_liquid(i,j,k) );
       break;
 
     case FACEY:
-      insystem = ( !v_oob(i,j,k) && v_vol_fluid(i,j,k));
+      insystem = ( !v_oob(i,j,k) && v_vol_fluid(i,j,k) && v_vol_liquid(i,j,k) );
       break;
 
     case FACEZ:
-      insystem = ( !w_oob(i,j,k) && w_vol_fluid(i,j,k));
+      insystem = ( !w_oob(i,j,k) && w_vol_fluid(i,j,k) && w_vol_liquid(i,j,k) );
       break;
 
     case CENTER:
-      insystem =
-        ( !c_oob(i,j,k) && c_vol_liquid(i,j,k) && c_vol_fluid(i,j,k) );
+      insystem = 
+        !(isCollision(myUIndex(i,j,k)) &&
+          isCollision(myUIndex(i+1,j,k)) &&
+          isCollision(myVIndex(i,j,k)) &&
+          isCollision(myVIndex(i,j+1,k)) &&
+          isCollision(myWIndex(i,j,k)) &&
+          isCollision(myWIndex(i,j,k+1)) ) && // cell surrounded by walls
+        ( !c_oob(i,j,k) && c_vol_fluid(i,j,k) );
       break;
 
     case EDGEXY:
@@ -1754,21 +1760,44 @@ SolveType sim_stokesSolver<T>::solveType(
 
   // not in the linear system
   if (!insystem)
+  {
     return INVALIDIDX;
+  }
   
   switch ( fidx )
   {
+    // classify collision boundary
     case FACEX:
-      if ( u_oob(i+1,j,k) ) return COLLISION;
-      if ( u_vol_fluid(i,j,k) < 0.5 ) return COLLISION;
+      if ( u_oob(i+1,j,k) || u_oob(i-1,j,k) )
+      {
+        //std::cerr << "uc at " << i << " " << j << " " << k << std::endl;
+        return COLLISION;
+      }
+      if ( c_oob(i,j,k) || !c_vol_fluid(i,j,k) || c_oob(i-1,j,k) || !c_vol_fluid(i-1,j,k) )
+        return COLLISION;
+      break;
 
     case FACEY:
-      if ( v_oob(i,j+1,k) ) return COLLISION;
-      if ( v_vol_fluid(i,j,k) < 0.5 ) return COLLISION;
+      if ( v_oob(i,j+1,k) || v_oob(i,j-1,k) ) 
+      {
+        //std::cerr << "vc at " << i << " " << j << " " << k << std::endl;
+        return COLLISION;
+      }
+      //if ( v_vol_fluid(i,j,k) < 0.5 )
+      if ( c_oob(i,j,k) || !c_vol_fluid(i,j,k) || c_oob(i,j-1,k) || !c_vol_fluid(i,j-1,k) )
+        return COLLISION;
+      break;
 
     case FACEZ:
-      if ( w_oob(i,j,k+1) ) return COLLISION;
-      if ( w_vol_fluid(i,j,k) < 0.5 ) return COLLISION;
+      if ( w_oob(i,j,k+1) || w_oob(i,j,k-1) )
+      {
+        //std::cerr << "wc at " << i << " " << j << " " << k << std::endl;
+        return COLLISION;
+      }
+      //if ( w_vol_fluid(i,j,k) < 0.5 ) return COLLISION;
+      if ( c_oob(i,j,k) || !c_vol_fluid(i,j,k) || c_oob(i,j,k-1) || !c_vol_fluid(i,j,k-1) )
+        return COLLISION;
+      break;
 
     default:
       break;
@@ -1793,24 +1822,21 @@ SolveType sim_stokesSolver<T>::solveType(
       break;
     case FACEX:
       insystem = 
-        ( u_vol_liquid(i,j,k) &&
-          !c_oob(i-1,j,k) && c_vol_fluid(i-1,j,k) && c_vol_fluid(i,j,k) &&
+        ( (c_oob(i-1,j,k) || c_vol_fluid(i-1,j,k)) && c_vol_fluid(i,j,k) &&
           ez_vol_fluid(i,j,k) && !txy_oob(i,j+1,k) && ez_vol_fluid(i,j+1,k) &&
           ey_vol_fluid(i,j,k) && !txz_oob(i,j,k+1) && ey_vol_fluid(i,j,k+1) );
       break;
 
     case FACEY:
       insystem =
-        ( v_vol_liquid(i,j,k) &&
-          !c_oob(i,j-1,k) && c_vol_fluid(i,j-1,k) && c_vol_fluid(i,j,k) && 
+        ( (c_oob(i,j-1,k) || c_vol_fluid(i,j-1,k)) && c_vol_fluid(i,j,k) && 
           ez_vol_fluid(i,j,k) && !txy_oob(i+1,j,k) && ez_vol_fluid(i+1,j,k) && 
           ex_vol_fluid(i,j,k) && !tyz_oob(i,j,k+1) && ex_vol_fluid(i,j,k+1) );
       break;
 
     case FACEZ:
       insystem =
-        ( w_vol_liquid(i,j,k) &&
-          !c_oob(i,j,k-1) && c_vol_fluid(i,j,k-1) && c_vol_fluid(i,j,k) && 
+        ( (c_oob(i,j,k-1) || c_vol_fluid(i,j,k-1)) && c_vol_fluid(i,j,k) && 
           ey_vol_fluid(i,j,k) && !txz_oob(i+1,j,k) && ey_vol_fluid(i+1,j,k) && 
           ex_vol_fluid(i,j,k) && !tyz_oob(i,j+1,k) && ex_vol_fluid(i,j+1,k) );
       break;
@@ -1851,6 +1877,26 @@ sim_stokesSolver<T>::classifyIndexFieldPartial(
   {
     int i = vit.x(), j = vit.y(), k = vit.z();
     auto type = solveType(surf_weights, col_weights, i, j, k, fidx);
+//    if ( fidx == CENTER )
+//    {
+//      if ( type == SOLVED )
+//      {
+//        std::cerr << "cs at " << i << " " << j << " " << k << std::endl;
+//      }
+//      else if ( type == AIR )
+//      {
+//        std::cerr << "ca at " << i << " " << j << " " << k << std::endl;
+//      }
+//      else if ( type == INVALIDIDX )
+//      {
+//        std::cerr << "ci at " << i << " " << j << " " << k << std::endl;
+//      }
+//      else if ( type != INVALIDIDX )
+//      {
+//        std::cerr << "UNKNOWN c at " << i << " " << j << " " << k << std::endl;
+//      }
+//    }
+
 
     if ( type == INVALIDIDX )
       continue; // already set to INVALIDIDX
@@ -1923,10 +1969,16 @@ sim_stokesSolver<T>::buildCollisionIndex(
 
 template<typename T>
 void
-sim_stokesSolver<T>::buildIndices(
+sim_stokesSolver<T>::classifyAndBuildIndices(
     const SIM_RawField * const* surf_weights,
     const SIM_RawField * const* col_weights)
 {
+  initAndClassifyIndex(surf_weights, col_weights, myUIndex, FACEX);
+  initAndClassifyIndex(surf_weights, col_weights, myVIndex, FACEY);
+  initAndClassifyIndex(surf_weights, col_weights, myWIndex, FACEZ);
+
+  // the central indices depend on face indices being classified.
+  // We want to avoid creating pressure samples surrounded by collision faces
   initAndClassifyIndex(surf_weights, col_weights, myCentralIndex, CENTER);
   initAndClassifyIndex(surf_weights, col_weights, myTxyIndex, EDGEXY);
   initAndClassifyIndex(surf_weights, col_weights, myTxzIndex, EDGEXZ);
@@ -1954,10 +2006,6 @@ sim_stokesSolver<T>::buildVelocityIndices(
     const SIM_RawField * const* surf_weights,
     const SIM_RawField * const* col_weights)
 {
-  initAndClassifyIndex(surf_weights, col_weights, myUIndex, FACEX);
-  initAndClassifyIndex(surf_weights, col_weights, myVIndex, FACEY);
-  initAndClassifyIndex(surf_weights, col_weights, myWIndex, FACEZ);
-
   // Velocity indices start from 0 as they are local to their block because they
   // are only used in the blockwise system builder
   exint maxindex = 0;
@@ -3313,9 +3361,9 @@ sim_stokesSolver<T>::pruneSystem(
     const BlockMatrixType &A,
     const BlockVectorType &b,
     // output
-    UT_SparseMatrixELLT<T,true> &newA, // colmajor
-    UT_VectorT<T>               &newb,
-    UT_ExintArray               &to_original) const
+    MatrixType            &newA, // colmajor
+    VectorType            &newb,
+    UT_ExintArray         &to_original) const
 {
   assert(!MatrixType::IsRowMajor);
   to_original.clear();
@@ -3324,7 +3372,7 @@ sim_stokesSolver<T>::pruneSystem(
 
   for (int k = 0; k < A.outerSize(); ++k)
   {
-    typename MatrixType::InnerIterator it(A,k);
+    typename BlockMatrixType::InnerIterator it(A,k);
     if ( it ) 
     {
       to_new[k] = to_original.size();
@@ -3341,7 +3389,7 @@ sim_stokesSolver<T>::pruneSystem(
     auto orig_k = to_original[k];
     newb(k) = b[orig_k];
     // collect non-zeros for the new matrix
-    for (typename MatrixType::InnerIterator it(A,orig_k); it; ++it)
+    for (typename BlockMatrixType::InnerIterator it(A,orig_k); it; ++it)
     {
       auto new_row = to_new[it.row()];
       assert( new_row != -1 );
@@ -3428,15 +3476,24 @@ sim_stokesSolver<T>::solveBlockwiseStokes(
   {
   if ( !isMatrixPruned(A) )
   {
+    for (int k = 0; k < A.outerSize(); ++k )
+    {
+      typename BlockMatrixType::InnerIterator it(A,k);
+      if (!it)
+      {
+        std::cerr << " k = " << k << std::endl;
+      }
+    }
     UT_VoxelArrayIteratorI vit;
     std::cerr << " u indices: " << std::endl;
     vit.setConstArray(myUIndex.field());
     for ( vit.rewind(); !vit.atEnd(); vit.advance() )
     {
-      if ( isInSystem(vit.getValue()) )
-        std::cerr << vit.getValue() << " ";
-      else if ( isCollision(vit.getValue()) )
-        std::cerr << "c ";
+      int i = vit.x(), j = vit.y(), k = vit.z();
+      if ( isCollision(vit.getValue()) )
+        std::cerr << i << " " << j << " " << k << ";c  ";
+      else if ( isInSystem(vit.getValue()) )
+        std::cerr << i << " " << j << " " << k << ";  ";
     }
     std::cerr <<  std::endl;
 
@@ -3444,10 +3501,11 @@ sim_stokesSolver<T>::solveBlockwiseStokes(
     vit.setConstArray(myVIndex.field());
     for ( vit.rewind(); !vit.atEnd(); vit.advance() )
     {
-      if ( isInSystem(vit.getValue()) )
-        std::cerr << vit.getValue() << " ";
-      else if ( isCollision(vit.getValue()) )
-        std::cerr << "c ";
+      int i = vit.x(), j = vit.y(), k = vit.z();
+      if ( isCollision(vit.getValue()) )
+        std::cerr << i << " " << j << " " << k << ";c  ";
+      else if ( isInSystem(vit.getValue()) )
+        std::cerr << i << " " << j << " " << k << ";  ";
     }
     std::cerr <<  std::endl;
 
@@ -3455,10 +3513,11 @@ sim_stokesSolver<T>::solveBlockwiseStokes(
     vit.setConstArray(myWIndex.field());
     for ( vit.rewind(); !vit.atEnd(); vit.advance() )
     {
-      if ( isInSystem(vit.getValue()) )
-        std::cerr << vit.getValue() << " ";
-      else if ( isCollision(vit.getValue()) )
-        std::cerr << "c ";
+      int i = vit.x(), j = vit.y(), k = vit.z();
+      if ( isCollision(vit.getValue()) )
+        std::cerr << i << " " << j << " " << k << ";c  ";
+      else if ( isInSystem(vit.getValue()) )
+        std::cerr << i << " " << j << " " << k << ";  ";
     }
     std::cerr <<  std::endl;
 
@@ -3466,10 +3525,33 @@ sim_stokesSolver<T>::solveBlockwiseStokes(
     vit.setConstArray(myCentralIndex.field());
     for ( vit.rewind(); !vit.atEnd(); vit.advance() )
     {
+      int i = vit.x(), j = vit.y(), k = vit.z();
       if ( isInSystem(vit.getValue()) )
       {
-        std::cerr << vit.getValue();
-        std::cerr << " ";
+        std::cerr << i << " " << j << " " << k << ";  ";
+        std::cerr << "f = " << cweights[0]->field()->getValue(i,j,k) << "; ";
+        std::cerr << "l = " << sweights[0]->field()->getValue(i,j,k) << "; ";
+        std::cerr << "uf0 = " << cweights[4]->field()->getValue(i,j,k) << "; ";
+        std::cerr << "vf0 = " << cweights[5]->field()->getValue(i,j,k) << "; ";
+        std::cerr << "wf0 = " << cweights[6]->field()->getValue(i,j,k) << "; ";
+        std::cerr << "ul0 = " << sweights[4]->field()->getValue(i,j,k) << "; ";
+        std::cerr << "vl0 = " << sweights[5]->field()->getValue(i,j,k) << "; ";
+        std::cerr << "wl0 = " << sweights[6]->field()->getValue(i,j,k) << "; ";
+        std::cerr << "ub0 = " << (u_oob(i+1,j,k) || u_oob(i-1,j,k)) << "; ";
+        std::cerr << "vb0 = " << (v_oob(i,j+1,k) || v_oob(i,j-1,k)) << "; ";
+        std::cerr << "wb0 = " << (w_oob(i,j,k+1) || v_oob(i,j,k-1)) << "; ";
+
+        std::cerr << "uf1 = " << cweights[4]->field()->getValue(i+1,j,k) << "; ";
+        std::cerr << "vf1 = " << cweights[5]->field()->getValue(i,j+1,k) << "; ";
+        std::cerr << "wf1 = " << cweights[6]->field()->getValue(i,j,k+1) << "; ";
+        std::cerr << "ul1 = " << sweights[4]->field()->getValue(i+1,j,k) << "; ";
+        std::cerr << "vl1 = " << sweights[5]->field()->getValue(i,j+1,k) << "; ";
+        std::cerr << "wl1 = " << sweights[6]->field()->getValue(i,j,k+1) << "; ";
+
+        std::cerr << "ub1 = " << (u_oob(i,j,k) || u_oob(i+2,j,k)) << "; ";
+        std::cerr << "vb1 = " << (v_oob(i,j,k) || u_oob(i,j+2,k)) << "; ";
+        std::cerr << "wb1 = " << (w_oob(i,j,k) || u_oob(i,j,k+2)) << "; ";
+        std::cerr << std::endl;
       }
     }
     std::cerr << std::endl;
@@ -3485,18 +3567,36 @@ sim_stokesSolver<T>::solveBlockwiseStokes(
     updateVelocitiesBlockwise(uold - H*x + (1.0/dx) * ust, solid_vel, valid, vel);
 #else
   // 29 is the max non zeros per row in the stokes system
-  MatrixType Ah(system_size, 29);
-  VectorType bh(0, system_size-1);
-  VectorType x(0, system_size-1);
-  copySystem(A, b, Ah, bh);
+  MatrixType Ah;
+  VectorType bh;
+  UT_ExintArray to_original;
+  if ( !isMatrixPruned(A) )
+  {
+    std::cerr<< "WARNING: matrix has been pruned" << std::endl;
+    pruneSystem(A,b,Ah,bh,to_original);
+  }
+  else
+  {
+    copySystem(A, b, Ah, bh);
+    for ( int i = 0; i < system_size; ++i )
+      to_original.append(i);
+  }
 
-  auto result = solveSystem(Ah, bh, x, mySolver.getUseOpenCL());
+  VectorType xsmall(0, to_original.size()-1);
+
+  auto result = solveSystem(Ah, bh, xsmall, mySolver.getUseOpenCL());
   if (result == SUCCESS)
   {
     UT_PerfMonAutoSolveEvent event(&mySolver, "Update Velocity");
 
     sim_updateVelocityParms parms(sweights, solid_vel, densfield, surf_pres,
           mySolver.getMinDensity(), mySolver.getMaxDensity());
+
+    VectorType x(0, system_size-1);
+    for ( int i = 0; i < to_original.size(); ++i )
+    {
+      x(to_original[i]) = xsmall(i);
+    }
 
     for ( int axis = 0; axis < 3; ++axis )
     {
@@ -3683,10 +3783,10 @@ sim_stokesSolver<T>::solveSystemEigen(
   if ( !system_size )
     return NOCHANGE; // nothing to do
 
-  PCG<T> solver;
-  solver.setTolerance(tol);
-  solver.setMaxIterations(3*system_size);
-  //SparseLU<T> solver;
+  //PCG<T> solver;
+  //solver.setTolerance(tol);
+  //solver.setMaxIterations(3*system_size);
+  SparseLU<T> solver;
   //SimplicialLDLT<double> solver;
 
   solver.compute( A );
@@ -3713,17 +3813,17 @@ sim_stokesSolver<T>::solveSystemEigen(
 
     // Print condition number if solve fails to see if there is a problem with
     // conditioning
-    //MatrixX<T> Adense;
-    //Adense = MatrixX<T>(A);
-    //T condition_number = Adense.inverse().norm() / Adense.norm();
+    MatrixX<T> Adense;
+    Adense = MatrixX<T>(A);
+    T condition_number = Adense.inverse().norm() / Adense.norm();
 
-    //std::cerr << "k(A) = " << condition_number << std::endl;
+    std::cerr << "k(A) = " << condition_number << std::endl;
 
   }
 
-  UT_WorkBuffer extra_info;
-  extra_info.sprintf("Iterations=%d, Error=%.6f", int(solver.iterations()), solver.error());
-  event.setExtraInfo(extra_info.buffer());
+  //UT_WorkBuffer extra_info;
+  //extra_info.sprintf("Iterations=%d, Error=%.6f", int(solver.iterations()), solver.error());
+  //event.setExtraInfo(extra_info.buffer());
 
   return SUCCESS;
 }
