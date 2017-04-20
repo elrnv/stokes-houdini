@@ -126,6 +126,6 @@ rotating_ball_pvp:
 rotating_ball: rotating_ball_stokes rotating_ball_vp rotating_ball_pvp
 
 ball:
-	$(HXX) ball_thru_old.hip dopnet1/output
+	$(HXX) ball_thru.hip fluid/fluid
 
 # WIP: rendering targets. It's easier to setup rendering targets from this makefile 
