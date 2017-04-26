@@ -5,19 +5,24 @@
 
 #CXX = clang-omp
 
-include EigenPathMakefile # sets the EIGEN_INCLUDE_PATH variable
+ifndef EIGEN_INCLUDE_DIR
+	EIGEN_INCLUDE_DIR = /usr/local/include/eigen3
+endif
+
+ifndef DSO_DIR
+	DSO_DIR = .
+endif
 
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Linux)
-	DSONAME = libStokes.so
-	INCDIRS = -fopenmp
+	DSONAME = $(DSO_DIR)/libStokes.so
+	LIBS = -fopenmp
 else ifeq ($(UNAME_S),Darwin)
-	DSONAME = libStokes.dylib
+	DSONAME = $(DSO_DIR)/libStokes.dylib
 	LIBS = -framework OpenCL
 endif
 
-INCDIRS += -I$(EIGEN_INCLUDE_PATH)
-
+INCDIRS = -I$(EIGEN_INCLUDE_DIR)
 SOURCES = main.C SIM/SIM_Stokes.C
 
 #OPTIMIZER = -g
@@ -28,4 +33,3 @@ OPTIMIZER = -O3 -DNDEBUG
 #      include $(HFS)/toolkit/makefiles/Makefile.gnu
 #
 include $(HFS)/toolkit/makefiles/Makefile.gnu
-
