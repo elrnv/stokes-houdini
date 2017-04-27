@@ -9,7 +9,7 @@ from os import makedirs
 
 parser = argparse.ArgumentParser()
 parser.add_argument("hip_file", help="Hip file to load, which contains the desired node to be run.")
-parser.add_argument("node_path", help="Node path relative to /obj/. This node must have a button named <executebackground>")
+parser.add_argument("node_path", help="Absolute node path. This node must have a button named <executebackground>")
 parser.add_argument("--nohperf", help="Do not collect performance stats.", action="store_true")
 args = parser.parse_args()
 
@@ -18,7 +18,7 @@ hipfile = args.hip_file
 hou.hipFile.load(hipfile, ignore_load_warnings=True)
 
 nodepath = args.node_path
-node = hou.node("/obj/" + nodepath)
+node = hou.node(nodepath)
 if node is None:
   print "Couldn't locate the node to cook"
   print usage
