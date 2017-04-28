@@ -126,7 +126,7 @@ rotating_ball_pvp:
 rotating_ball: rotating_ball_stokes rotating_ball_vp rotating_ball_pvp
 
 render_rotating_ball: 
-	$(HXX) rotating_ball.hip /out/mantra_ipr | tee -a momentum_pvp.txt
+	$(HXX) rotating_ball.hip /out/mantra_ipr
 
 ball:
 	$(HXX) ball_thru.hip /obj/fluid/fluid
