@@ -131,4 +131,7 @@ render_rotating_ball:
 ball:
 	$(HXX) ball_thru.hip /obj/fluid/fluid
 
+render_ball:
+	$(HXX) ball_thru.hip /out/houdini
+
 # WIP: rendering targets. It's easier to setup rendering targets from this makefile 
