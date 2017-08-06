@@ -15,9 +15,19 @@ HXX=hython -j $(JOBS) run.py
 
 usage:
 	@echo "Available jobs: " $(JOBS)
-	@echo "Please chose one of the following targets:"
-	@echo "   collision_houdini"
-	@echo "   collision_stokes"
+	@echo "To reproduce the results in our paper, please choose one of the following targets:"
+	@echo "   rope_coiling_25                   (rope coling example with moderate viscosity (stokes vs. decoupled))"
+	@echo "   rope_coiling_100                  (rope coling example with high viscosity (stokes vs. decoupled))"
+	@echo "   rope_coiling_molasses             (rope coling with surface tension)"
+	@echo "   rope_coiling_conveyor_belt        (rope coling on a moving conveyor belt)"
+	@echo "   piling_armadillos                 (viscous armadillos falling into a pile)"
+	@echo "   colliding_characters              (an armadillo and a stanford bunny colliding in zero gravity)"
+	@echo "   ball_through_goop                 (a solid ball emerging from a box of viscous goop)"
+	@echo "   collapsing_liquid_squab           (the Houdini Squab as a viscous liquid with surface tension in zero gravity)"
+	@echo "   variable_viscosity_block          (a block of viscous liquid falling into a rectangular box)"
+	@echo "   caramel_on_wafer                  (caramel buckling on top of a wafer)"
+	@echo ""
+	@echo "Targets for individual simulations can be found below:"
 	@echo "   collision"
 	@echo "   coil_houdini"
 	@echo "   coil_pvp"
@@ -38,12 +48,29 @@ usage:
 	@echo "   rotating_ball"
 	@echo "   ball"
 
+rope_coiling_25: viscous_coil_stokes_25 viscous_coil_houdini_25
+rope_coiling_100: viscous_coil_stokes_100 viscous_coil_houdini_100
+rope_coiling_molasses: molasses_coil
+rope_coiling_conveyor_belt: conveyor_belt_stokes
+piling_armadillos: armadillos_stokes armadillos_houdini
+colliding_characters:
+ball_through_goop:
+collapsing_liquid_squab:
+variable_viscosity_block:
+	$(HXX) variable_viscosity.hip /obj/houdini_fluid/houdini_fluid
+caramel_on_wafer: buckling
+
 collision_houdini:
 	$(HXX) collision.hip /obj/houdini_fluid/houdini_fluid
 collision_stokes:
 	$(HXX) collision.hip /obj/stokes_fluid/stokes_fluid
 
 collision: collision_stokes collision_houdini
+
+armadillos_stokes:
+	$(HXX) armadillos.hip /obj/stokes/surface_cache
+armadillos_houdini:
+	$(HXX) armadillos.hip /obj/houdini/surface_cache
 
 coil_houdini:
 	$(HXX) coil_compare.hip /obj/houdini/houdini_fluid_half
