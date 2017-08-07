@@ -51,6 +51,14 @@ Note that currently, only the **Stokes** **Scheme** is fully optimized with Open
 other Schemes will use a more expensive CPU based solver.
 
 
-## TODO
+## Examples
+To run the examples, `cd` into the `examples` directory and run
+```
+$ make <example name>
+```
+where `<example name>` is the name of the example you want to run. The list of available examples is shown in the `makefile` in the same directory. You can also run `make` without arguments to see this list.
+The results will be produced in the `geo` or `sim` subdirectories or `render` for render targets.
 
-- Add more examples
+The following examples are known to work:
+
+- piling armadillos
