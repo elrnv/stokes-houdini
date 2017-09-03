@@ -15,7 +15,7 @@ HXX=hython -j $(JOBS) run.py
 
 usage:
 	@echo "Available jobs: " $(JOBS)
-	@echo "To reproduce the results in our paper, please choose one of the following targets:"
+	@echo "To reproduce the simulations in our paper, please choose one of the following targets:"
 	@echo "   rope_coiling_25                   (rope coling example with moderate viscosity (stokes vs. decoupled))"
 	@echo "   rope_coiling_100                  (rope coling example with high viscosity (stokes vs. decoupled))"
 	@echo "   rope_coiling_molasses             (rope coling with surface tension)"
@@ -27,38 +27,51 @@ usage:
 	@echo "   variable_viscosity_block          (a block of viscous liquid falling into a rectangular box)"
 	@echo "   caramel_on_wafer                  (caramel buckling on top of a wafer)"
 	@echo ""
+	@echo "To render a corresponding animation with Mantra, please choose one of the following targets"
+	@echo "   render_rope_coiling_25"
+	@echo "   render_rope_coiling_100"
+	@echo "   render_rope_coiling_molasses"
+	@echo "   render_rope_coiling_conveyor_belt"
+	@echo "   render_piling_armadillos"
+	@echo "   render_colliding_characters"
+	@echo "   render_ball_through_goop"
+	@echo "   render_collapsing_liquid_squab"
+	@echo "   render_variable_viscosity_block"
+	@echo "   render_caramel_on_wafer"
+	@echo ""
 	@echo "Targets for individual simulations can be found below:"
 	@echo "   collision"
 	@echo "   coil_houdini"
 	@echo "   coil_pvp"
 	@echo "   coil_vp"
 	@echo "   coil_stokes"
-	@echo "   conveyor_belt"
-	@echo "   conveyor_belt_stokes"
 	@echo "   viscous_coil_houdini"
 	@echo "   viscous_coil_stokes"
 	@echo "   viscous_coils"
 	@echo "   dam_break_houdini"
 	@echo "   dam_break_stokes"
 	@echo "   dam_break"
-	@echo "   buckling"
 	@echo "   surface_tension_stokes"
 	@echo "   surface_tension_decoupled"
 	@echo "   surface_tension"
 	@echo "   rotating_ball"
 	@echo "   ball"
 
+# Simulation targets
 rope_coiling_25: viscous_coil_stokes_25 viscous_coil_houdini_25
 rope_coiling_100: viscous_coil_stokes_100 viscous_coil_houdini_100
-rope_coiling_molasses: molasses_coil
-rope_coiling_conveyor_belt: conveyor_belt_stokes
+rope_coiling_molasses:
+rope_coiling_conveyor_belt:
+	$(HXX) conveyor_belt.hip /obj/stokes/stokes
 piling_armadillos: armadillos_stokes armadillos_houdini
 colliding_characters:
 ball_through_goop:
 collapsing_liquid_squab:
 variable_viscosity_block:
 	$(HXX) variable_viscosity.hip /obj/houdini_fluid/houdini_fluid
-caramel_on_wafer: buckling
+caramel_on_wafer:
+	$(HXX) buckling.hip /obj/dopnet1/output
+
 
 collision_houdini:
 	$(HXX) collision.hip /obj/houdini_fluid/houdini_fluid
@@ -81,12 +94,6 @@ coil_vp:
 coil_stokes:
 	$(HXX) coil_compare.hip /obj/stokes/viscous_fluid
 
-conveyor_belt:
-	$(HXX) conveyor_belt.hip /obj/dopnet1/output
-
-conveyor_belt_stokes:
-	$(HXX) conveyor_belt.hip /obj/stokes/stokes
-
 viscous_coil_houdini:
 	$(HXX) viscous_coil_houdini.hip /obj/fluid/viscous_fluid
 
@@ -102,9 +109,6 @@ dam_break_stokes:
 	$(HXX) dam_break.hip /obj/stokes/stokes_fluid
 
 dam_break: dam_break_stokes dam_break_houdini
-
-buckling:
-	$(HXX) buckling.hip /obj/dopnet1/output
 
 surface_tension_stokes:
 	$(HXX) surface_tension.hip /obj/stokes_fluid/stokes
@@ -152,13 +156,31 @@ rotating_ball_pvp:
 
 rotating_ball: rotating_ball_stokes rotating_ball_vp rotating_ball_pvp
 
-render_rotating_ball: 
-	$(HXX) rotating_ball.hip /out/mantra_ipr
-
 ball:
 	$(HXX) ball_thru.hip /obj/fluid/fluid
 
+# Render targets
+render_rope_coiling_25: viscous_coil_stokes_25 viscous_coil_houdini_25
+render_rope_coiling_100: viscous_coil_stokes_100 viscous_coil_houdini_100
+render_rope_coiling_molasses:
+render_rope_coiling_conveyor_belt:
+	$(HXX) conveyor_belt.hip /out/mantra_ipr
+render_piling_armadillos: render_armadillos_stokes render_armadillos_houdini
+render_colliding_characters:
+render_ball_through_goop:
+render_collapsing_liquid_squab:
+render_variable_viscosity_block:
+	$(HXX) variable_viscosity.hip /out/mantra_ipr
+render_caramel_on_wafer:
+	$(HXX) buckling.hip /out/mantra_ipr
+
+render_armadillos_stokes:
+	$(HXX) armadillos.hip /out/stokes
+render_armadillos_houdini:
+	$(HXX) armadillos.hip /out/houdini
+
+render_rotating_ball: 
+	$(HXX) rotating_ball.hip /out/mantra_ipr
+
 render_ball:
 	$(HXX) ball_thru.hip /out/houdini
-
-# WIP: rendering targets. It's easier to setup rendering targets from this makefile 
