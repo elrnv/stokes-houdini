@@ -17,7 +17,7 @@
 #include <iostream>
 #include "../util/eigen.h"
 
-#define BLOCKWISE_STOKES
+//#define BLOCKWISE_STOKES
 //#define USE_EIGEN_SOLVER_FOR_BLOCKWISE_STOKES
 //#define PRINT_ROTATING_BALL_ANGULAR_MOMENTUM
 
