@@ -45,9 +45,6 @@ usage:
 	@echo "   coil_pvp"
 	@echo "   coil_vp"
 	@echo "   coil_stokes"
-	@echo "   viscous_coil_houdini"
-	@echo "   viscous_coil_stokes"
-	@echo "   viscous_coils"
 	@echo "   dam_break_houdini"
 	@echo "   dam_break_stokes"
 	@echo "   dam_break"
@@ -94,13 +91,17 @@ coil_vp:
 coil_stokes:
 	$(HXX) coil_compare.hip /obj/stokes/viscous_fluid
 
-viscous_coil_houdini:
-	$(HXX) viscous_coil_houdini.hip /obj/fluid/viscous_fluid
+viscous_coil_houdini_25:
+	$(HXX) viscous_coil_houdini_25.hip /obj/fluid/houdini_fluid
 
-viscous_coil_stokes:
-	$(HXX) viscous_coil_stokes.hip /obj/fluid/viscous_fluid
+viscous_coil_stokes_25:
+	$(HXX) viscous_coil_stokes_25.hip /obj/fluid/stokes_fluid
 
-viscous_coils: viscous_coil_houdini viscous_coil_stokes
+viscous_coil_houdini_100:
+	$(HXX) viscous_coil_houdini_100.hip /obj/fluid/houdini_fluid
+
+viscous_coil_stokes_100:
+	$(HXX) viscous_coil_stokes_100.hip /obj/fluid/stokes_fluid
 
 dam_break_houdini:
 	$(HXX) dam_break.hip /obj/houdini/houdini_fluid
@@ -160,8 +161,8 @@ ball:
 	$(HXX) ball_thru.hip /obj/fluid/fluid
 
 # Render targets
-render_rope_coiling_25: viscous_coil_stokes_25 viscous_coil_houdini_25
-render_rope_coiling_100: viscous_coil_stokes_100 viscous_coil_houdini_100
+render_rope_coiling_25: render_viscous_coil_stokes_25 render_viscous_coil_houdini_25
+render_rope_coiling_100: render_viscous_coil_stokes_100 render_viscous_coil_houdini_100
 render_rope_coiling_molasses:
 render_rope_coiling_conveyor_belt:
 	$(HXX) conveyor_belt.hip /out/mantra_ipr
@@ -184,3 +185,15 @@ render_rotating_ball:
 
 render_ball:
 	$(HXX) ball_thru.hip /out/houdini
+
+render_viscous_coil_houdini_25:
+	$(HXX) viscous_coil_houdini_25.hip /out/mantra_ipr
+
+render_viscous_coil_stokes_25:
+	$(HXX) viscous_coil_stokes_25.hip /out/mantra_ipr
+
+render_viscous_coil_houdini_100:
+	$(HXX) viscous_coil_houdini_100.hip /out/mantra_ipr
+
+render_viscous_coil_stokes_100:
+	$(HXX) viscous_coil_stokes_100.hip /out/mantra_ipr
