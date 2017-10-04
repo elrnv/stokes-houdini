@@ -187,13 +187,13 @@ render_ball:
 	$(HXX) ball_thru.hip /out/houdini
 
 render_viscous_coil_houdini_25:
-	$(HXX) viscous_coil_houdini_25.hip /out/mantra_ipr
+	$(HXX) viscous_coil_houdini_25.hip /out/mantra1
 
 render_viscous_coil_stokes_25:
-	$(HXX) viscous_coil_stokes_25.hip /out/mantra_ipr
+	$(HXX) viscous_coil_stokes_25.hip /out/mantra1
 
 render_viscous_coil_houdini_100:
-	$(HXX) viscous_coil_houdini_100.hip /out/mantra_ipr
+	$(HXX) viscous_coil_houdini_100.hip /out/mantra1
 
 render_viscous_coil_stokes_100:
-	$(HXX) viscous_coil_stokes_100.hip /out/mantra_ipr
+	$(HXX) viscous_coil_stokes_100.hip /out/mantra1
