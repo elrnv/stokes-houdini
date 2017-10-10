@@ -78,9 +78,9 @@ collision_stokes:
 collision: collision_stokes collision_houdini
 
 armadillos_stokes:
-	$(HXX) armadillos.hip /obj/stokes/surface_cache
+	$(HXX) armadillos.hipnc /obj/stokes/surface_cache
 armadillos_houdini:
-	$(HXX) armadillos.hip /obj/houdini/surface_cache
+	$(HXX) armadillos.hipnc /obj/houdini/surface_cache
 
 coil_houdini:
 	$(HXX) coil_compare.hip /obj/houdini/houdini_fluid_half
@@ -176,9 +176,9 @@ render_caramel_on_wafer:
 	$(HXX) buckling.hip /out/mantra_ipr
 
 render_armadillos_stokes:
-	$(HXX) armadillos.hip /out/stokes
+	$(HXX) armadillos.hipnc /out/stokes
 render_armadillos_houdini:
-	$(HXX) armadillos.hip /out/houdini
+	$(HXX) armadillos.hipnc /out/houdini
 
 render_rotating_ball: 
 	$(HXX) rotating_ball.hip /out/mantra_ipr
